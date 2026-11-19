@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 
 class AnkiDuelRepository(
     private val prefs: PreferencesStore,
-    private val api: AnkiDuelApiClient,
+    private val firebase: FirebaseBackendClient,
     private val usageTracker: UsageStatsTracker,
     private val ankiTracker: AnkiDroidTracker,
     private val permissionChecker: PermissionHealthChecker
@@ -61,37 +61,35 @@ class AnkiDuelRepository(
     )
     val lockStatus: StateFlow<GlobalLockStatus> = _lockStatus.asStateFlow()
 
-    private var wsJob: Job? = null
+    private var realtimeJob: Job? = null
 
     init {
         scope.launch {
             prefs.sessionFlow.collect { stored ->
                 _session.value = stored
                 if (stored.demoMode) {
-                    wsJob?.cancel()
+                    realtimeJob?.cancel()
                     refreshAndSync()
-                } else if (!stored.token.isNullOrBlank()) {
-                    startWebSocketListener(stored.serverUrl, stored.token)
+                } else if (!stored.userId.isNullOrBlank()) {
+                    startRealtimeListener(stored.userId, stored.trackedSocialPackages)
                     refreshAndSync()
                 } else {
-                    wsJob?.cancel()
+                    realtimeJob?.cancel()
                     _duels.value = emptyList()
-                    updateLockStatus(emptyList(), stored.userId.orEmpty(), stored.trackedSocialPackages)
+                    updateLockStatus(emptyList(), "", stored.trackedSocialPackages)
                 }
             }
         }
     }
 
-    suspend fun login(serverUrl: String, username: String, password: String) {
-        val cleanUrl = serverUrl.trim().trimEnd('/')
-        val res = api.login(cleanUrl, username, password)
-        prefs.saveAuth(res.token, res.userId, res.username, cleanUrl)
+    suspend fun login(email: String, password: String) {
+        val res = firebase.login(email, password)
+        prefs.saveAuth(res.userId, res.username, res.email)
     }
 
-    suspend fun register(serverUrl: String, username: String, password: String) {
-        val cleanUrl = serverUrl.trim().trimEnd('/')
-        val res = api.register(cleanUrl, username, password)
-        prefs.saveAuth(res.token, res.userId, res.username, cleanUrl)
+    suspend fun register(email: String, username: String, password: String) {
+        val res = firebase.register(email, username, password)
+        prefs.saveAuth(res.userId, res.username, res.email)
     }
 
     suspend fun enterDemoMode() {
@@ -100,12 +98,9 @@ class AnkiDuelRepository(
     }
 
     suspend fun logout() {
-        wsJob?.cancel()
+        realtimeJob?.cancel()
+        firebase.logout()
         prefs.logout()
-    }
-
-    suspend fun updateServerUrl(url: String) {
-        prefs.setServerUrl(url)
     }
 
     suspend fun updateTrackedPackages(packages: Set<String>) {
@@ -137,8 +132,9 @@ class AnkiDuelRepository(
         val duel = if (current.demoMode) {
             demoBot.createDuel(config)
         } else {
-            val token = current.token ?: error("Non connecté")
-            api.createDuel(current.serverUrl, token, config)
+            val userId = current.userId ?: error("Non connecté")
+            val username = current.username ?: "Joueur"
+            firebase.createDuel(userId, username, config)
         }
         // S'assurer que les apps obligatoires sont suivies
         if (config.mandatorySocialPackages.isNotEmpty()) {
@@ -151,10 +147,11 @@ class AnkiDuelRepository(
     suspend fun joinDuel(inviteCode: String): DuelState {
         val current = prefs.getSession()
         if (current.demoMode) {
-            error("Le mode Démo utilise des duels locaux. Passez en mode Serveur pour rejoindre par code.")
+            error("Le mode Démo utilise des duels locaux. Connectez-vous avec Firebase pour rejoindre par code.")
         }
-        val token = current.token ?: error("Non connecté")
-        val duel = api.joinDuel(current.serverUrl, token, inviteCode)
+        val userId = current.userId ?: error("Non connecté")
+        val username = current.username ?: "Joueur"
+        val duel = firebase.joinDuel(userId, username, inviteCode)
         if (duel.config.mandatorySocialPackages.isNotEmpty()) {
             prefs.setTrackedPackages(current.trackedSocialPackages + duel.config.mandatorySocialPackages)
         }
@@ -169,8 +166,8 @@ class AnkiDuelRepository(
             if (ok) refreshAndSync()
             ok
         } else {
-            val token = current.token ?: return false
-            val updated = api.activateJoker(current.serverUrl, token, duelId)
+            val userId = current.userId ?: return false
+            val updated = firebase.activateJoker(duelId, userId)
             mergeDuel(updated)
             true
         }
@@ -182,8 +179,8 @@ class AnkiDuelRepository(
             demoBot.forfeitDuel(duelId)
             refreshAndSync()
         } else {
-            val token = current.token ?: return
-            val updated = api.forfeitDuel(current.serverUrl, token, duelId)
+            val userId = current.userId ?: return
+            val updated = firebase.forfeitDuel(duelId, userId)
             mergeDuel(updated)
         }
     }
@@ -241,13 +238,13 @@ class AnkiDuelRepository(
 
         val updatedDuels = if (current.demoMode) {
             demoBot.syncSnapshot(snapshot)
-        } else if (!current.token.isNullOrBlank()) {
+        } else if (!current.userId.isNullOrBlank()) {
             runCatching {
-                val remoteDuels = api.fetchDuels(current.serverUrl, current.token)
+                val remoteDuels = firebase.fetchDuels(current.userId)
                 remoteDuels.map { duel ->
                     if (duel.status == DuelStatus.ACTIVE) {
                         runCatching {
-                            api.syncUsage(current.serverUrl, current.token, duel.duelId, snapshot)
+                            firebase.syncUsage(duel.duelId, current.userId, snapshot)
                         }.getOrDefault(duel)
                     } else duel
                 }
@@ -283,28 +280,13 @@ class AnkiDuelRepository(
         BlockStateHolder.updateLockState(status, trackedPackages)
     }
 
-    private fun startWebSocketListener(serverUrl: String, token: String) {
-        wsJob?.cancel()
-        wsJob = scope.launch {
-            while (true) {
-                runCatching {
-                    api.observeEvents(serverUrl, token).collect { event ->
-                        when (event) {
-                            is com.ankiduel.shared.protocol.ServerEvent.DuelUpdated -> {
-                                mergeDuel(event.duel)
-                            }
-                            else -> {
-                                val latest = api.fetchDuels(serverUrl, token)
-                                _duels.value = latest
-                                val current = _session.value
-                                if (current != null) {
-                                    updateLockStatus(latest, current.userId.orEmpty(), current.trackedSocialPackages)
-                                }
-                            }
-                        }
-                    }
-                }
-                kotlinx.coroutines.delay(5_000L)
+    private fun startRealtimeListener(userId: String, trackedPackages: Set<String>) {
+        realtimeJob?.cancel()
+        realtimeJob = scope.launch {
+            firebase.observeDuels(userId).collect { latest ->
+                _duels.value = latest
+                val mergedTracked = trackedPackages + activeMandatoryPackages()
+                updateLockStatus(latest, userId, mergedTracked)
             }
         }
     }

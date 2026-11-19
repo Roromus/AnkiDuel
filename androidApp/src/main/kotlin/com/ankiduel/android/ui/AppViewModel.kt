@@ -56,15 +56,15 @@ class AppViewModel(
         }
     }
 
-    fun login(serverUrl: String, username: String, password: String) {
+    fun login(email: String, password: String) {
         launchAction {
-            repository.login(serverUrl, username, password)
+            repository.login(email, password)
         }
     }
 
-    fun register(serverUrl: String, username: String, password: String) {
+    fun register(email: String, username: String, password: String) {
         launchAction {
-            repository.register(serverUrl, username, password)
+            repository.register(email, username, password)
         }
     }
 
@@ -125,13 +125,6 @@ class AppViewModel(
         if (packageName in next) next.remove(packageName) else next.add(packageName)
         launchAction {
             repository.updateTrackedPackages(next)
-        }
-    }
-
-    fun updateServerUrl(url: String) {
-        launchAction {
-            repository.updateServerUrl(url)
-            _feedbackMessage.value = "URL du serveur enregistrée."
         }
     }
 

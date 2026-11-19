@@ -1,8 +1,8 @@
 package com.ankiduel.android
 
 import android.app.Application
-import com.ankiduel.android.data.AnkiDuelApiClient
 import com.ankiduel.android.data.AnkiDuelRepository
+import com.ankiduel.android.data.FirebaseBackendClient
 import com.ankiduel.android.data.PreferencesStore
 import com.ankiduel.android.service.DuelSyncWorker
 import com.ankiduel.android.tracking.AnkiDroidTracker
@@ -11,13 +11,13 @@ import com.ankiduel.android.tracking.UsageStatsTracker
 
 class AppContainer(application: Application) {
     val prefs = PreferencesStore(application)
-    val apiClient = AnkiDuelApiClient()
+    val firebaseClient = FirebaseBackendClient()
     val usageTracker = UsageStatsTracker(application)
     val ankiTracker = AnkiDroidTracker(application)
     val permissionChecker = PermissionHealthChecker(application)
     val repository = AnkiDuelRepository(
         prefs = prefs,
-        api = apiClient,
+        firebase = firebaseClient,
         usageTracker = usageTracker,
         ankiTracker = ankiTracker,
         permissionChecker = permissionChecker

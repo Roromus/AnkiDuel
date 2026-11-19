@@ -44,15 +44,13 @@ fun AppsSettingsScreen(
     trackedPackages: Set<String>,
     mandatoryPackages: Set<String>,
     hasActiveDuel: Boolean,
-    serverUrl: String,
+    userEmail: String?,
     demoMode: Boolean,
     onTogglePackage: (String) -> Unit,
-    onSaveServerUrl: (String) -> Unit,
     onOpenPermissions: () -> Unit,
     onLogout: () -> Unit
 ) {
     var search by remember { mutableStateOf("") }
-    var editableUrl by remember(serverUrl) { mutableStateOf(serverUrl) }
 
     val mergedApps = remember(installedApps, trackedPackages) {
         val knownMap = installedApps.associateBy { it.packageName }.toMutableMap()
@@ -102,19 +100,13 @@ fun AppsSettingsScreen(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("Connexion & Permissions", fontWeight = FontWeight.Bold)
-                    if (!demoMode) {
-                        OutlinedTextField(
-                            value = editableUrl,
-                            onValueChange = { editableUrl = it },
-                            label = { Text("URL serveur Ktor") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                    Text("Compte & Permissions", fontWeight = FontWeight.Bold)
+                    if (!demoMode && !userEmail.isNullOrBlank()) {
+                        Text(
+                            text = "Connecté : $userEmail",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SubtleText
                         )
-                        Button(
-                            onClick = { onSaveServerUrl(editableUrl) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Mettre à jour l'URL") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(onClick = onOpenPermissions, modifier = Modifier.weight(1f)) {

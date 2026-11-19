@@ -44,14 +44,13 @@ import com.ankiduel.android.ui.theme.SubtleText
 
 @Composable
 fun AuthScreen(
-    initialServerUrl: String,
     isBusy: Boolean,
-    onLogin: (serverUrl: String, username: String, password: String) -> Unit,
-    onRegister: (serverUrl: String, username: String, password: String) -> Unit,
+    onLogin: (email: String, password: String) -> Unit,
+    onRegister: (email: String, username: String, password: String) -> Unit,
     onStartDemo: () -> Unit
 ) {
     var isRegisterMode by remember { mutableStateOf(false) }
-    var serverUrl by remember { mutableStateOf(initialServerUrl) }
+    var email by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
@@ -93,31 +92,33 @@ fun AuthScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = if (isRegisterMode) "Créer un compte" else "Connexion au serveur",
+                    text = if (isRegisterMode) "Créer un compte" else "Connexion",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
 
                 OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { serverUrl = it },
-                    label = { Text("URL du serveur Ktor") },
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("Email") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text("Pseudo (3–24 car.)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (isRegisterMode) {
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text("Pseudo (3–24 car.)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Mot de passe") },
+                    label = { Text("Mot de passe (6+ car.)") },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -125,10 +126,11 @@ fun AuthScreen(
 
                 Button(
                     onClick = {
-                        if (isRegisterMode) onRegister(serverUrl, username, password)
-                        else onLogin(serverUrl, username, password)
+                        if (isRegisterMode) onRegister(email, username, password)
+                        else onLogin(email, password)
                     },
-                    enabled = !isBusy && username.isNotBlank() && password.length >= 4,
+                    enabled = !isBusy && email.isNotBlank() && password.length >= 6 &&
+                        (!isRegisterMode || username.trim().length in 3..24),
                     colors = ButtonDefaults.buttonColors(containerColor = AnkiBlue),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier

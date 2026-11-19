@@ -17,10 +17,9 @@ import kotlinx.coroutines.flow.map
 private val Context.dataStore by preferencesDataStore(name = "ankiduel_prefs")
 
 data class StoredSession(
-    val token: String?,
     val userId: String?,
     val username: String?,
-    val serverUrl: String,
+    val email: String?,
     val demoMode: Boolean,
     val trackedSocialPackages: Set<String>
 )
@@ -28,10 +27,9 @@ data class StoredSession(
 class PreferencesStore(private val context: Context) {
 
     private object Keys {
-        val TOKEN = stringPreferencesKey("auth_token")
         val USER_ID = stringPreferencesKey("user_id")
         val USERNAME = stringPreferencesKey("username")
-        val SERVER_URL = stringPreferencesKey("server_url")
+        val EMAIL = stringPreferencesKey("email")
         val DEMO_MODE = booleanPreferencesKey("demo_mode")
         val TRACKED_PACKAGES = stringSetPreferencesKey("tracked_social_packages")
 
@@ -43,10 +41,9 @@ class PreferencesStore(private val context: Context) {
 
     val sessionFlow: Flow<StoredSession> = context.dataStore.data.map { prefs ->
         StoredSession(
-            token = prefs[Keys.TOKEN],
             userId = prefs[Keys.USER_ID],
             username = prefs[Keys.USERNAME],
-            serverUrl = prefs[Keys.SERVER_URL] ?: "http://10.0.2.2:8080",
+            email = prefs[Keys.EMAIL],
             demoMode = prefs[Keys.DEMO_MODE] ?: false,
             trackedSocialPackages = prefs[Keys.TRACKED_PACKAGES] ?: SocialAppCatalog.defaultSelectedPackages
         )
@@ -54,12 +51,11 @@ class PreferencesStore(private val context: Context) {
 
     suspend fun getSession(): StoredSession = sessionFlow.first()
 
-    suspend fun saveAuth(token: String, userId: String, username: String, serverUrl: String) {
+    suspend fun saveAuth(userId: String, username: String, email: String) {
         context.dataStore.edit { prefs ->
-            prefs[Keys.TOKEN] = token
             prefs[Keys.USER_ID] = userId
             prefs[Keys.USERNAME] = username
-            prefs[Keys.SERVER_URL] = serverUrl
+            prefs[Keys.EMAIL] = email
             prefs[Keys.DEMO_MODE] = false
         }
     }
@@ -69,22 +65,16 @@ class PreferencesStore(private val context: Context) {
             prefs[Keys.DEMO_MODE] = true
             prefs[Keys.USER_ID] = "local-demo-user"
             prefs[Keys.USERNAME] = username
-            prefs.remove(Keys.TOKEN)
+            prefs.remove(Keys.EMAIL)
         }
     }
 
     suspend fun logout() {
         context.dataStore.edit { prefs ->
-            prefs.remove(Keys.TOKEN)
             prefs.remove(Keys.USER_ID)
             prefs.remove(Keys.USERNAME)
+            prefs.remove(Keys.EMAIL)
             prefs[Keys.DEMO_MODE] = false
-        }
-    }
-
-    suspend fun setServerUrl(url: String) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.SERVER_URL] = url.trim().trimEnd('/')
         }
     }
 

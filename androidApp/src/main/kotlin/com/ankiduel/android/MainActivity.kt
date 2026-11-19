@@ -99,7 +99,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
         return
     }
 
-    val isAuthenticated = currentSession.demoMode || !currentSession.token.isNullOrBlank()
+    val isAuthenticated = currentSession.demoMode || !currentSession.userId.isNullOrBlank()
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -136,7 +136,6 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
             when {
                 !isAuthenticated -> {
                     AuthScreen(
-                        initialServerUrl = currentSession.serverUrl,
                         isBusy = isBusy,
                         onLogin = viewModel::login,
                         onRegister = viewModel::register,
@@ -205,10 +204,9 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                         trackedPackages = currentSession.trackedSocialPackages,
                         mandatoryPackages = viewModel.activeMandatoryPackages(),
                         hasActiveDuel = viewModel.hasActiveDuel(),
-                        serverUrl = currentSession.serverUrl,
+                        userEmail = currentSession.email,
                         demoMode = currentSession.demoMode,
                         onTogglePackage = viewModel::toggleSocialPackage,
-                        onSaveServerUrl = viewModel::updateServerUrl,
                         onOpenPermissions = { showPermissions = true },
                         onLogout = {
                             selectedDuelId = null

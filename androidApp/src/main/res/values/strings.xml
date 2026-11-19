@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AnkiDuel</string>
+    <string name="accessibility_service_label">AnkiDuel — Bloqueur Réseaux Sociaux</string>
+    <string name="accessibility_service_description">Détecte l\'ouverture des réseaux sociaux surveillés afin de les verrouiller tant que votre dette de révision AnkiDroid issue d\'un duel n\'est pas remboursée.</string>
+</resources>

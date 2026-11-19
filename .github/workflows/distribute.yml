@@ -33,7 +33,9 @@ jobs:
           fi
 
       - name: Run unit tests
-        run: ./gradlew :shared:test :androidApp:testDebugUnitTest --no-daemon
+        run: |
+          chmod +x gradlew
+          ./gradlew :shared:test :androidApp:testDebugUnitTest --no-daemon
 
       - name: Build Release APK
         env:

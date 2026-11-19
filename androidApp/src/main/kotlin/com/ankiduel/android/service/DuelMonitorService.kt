@@ -93,7 +93,8 @@ class DuelMonitorService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setSmallIcon(com.ankiduel.android.R.drawable.ic_notification)
+            .setColor(0xFF3B82F6.toInt())
             .setContentTitle("AnkiDuel actif")
             .setContentText(content)
             .setContentIntent(pi)

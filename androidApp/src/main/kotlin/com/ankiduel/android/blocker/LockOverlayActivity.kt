@@ -4,47 +4,75 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.ankiduel.android.AnkiDuelApplication
+import com.ankiduel.android.ui.components.AmbientGlowBackdrop
+import com.ankiduel.android.ui.components.ObsidianCard
+import com.ankiduel.android.ui.components.StatusPill
+import com.ankiduel.android.ui.components.formatCompactMinutes
+import com.ankiduel.android.ui.theme.AmberJoker
+import com.ankiduel.android.ui.theme.AmberJokerSoft
 import com.ankiduel.android.ui.theme.AnkiBlue
 import com.ankiduel.android.ui.theme.AnkiDuelTheme
-import com.ankiduel.android.ui.theme.AmberJoker
+import com.ankiduel.android.ui.theme.HairlineBorderSubtle
 import com.ankiduel.android.ui.theme.SocialCoral
+import com.ankiduel.android.ui.theme.SocialCoralSoft
+import com.ankiduel.android.ui.theme.TabularFeatures
+import com.ankiduel.android.ui.theme.TextMuted
+import com.ankiduel.android.ui.theme.TextPrimary
+import com.ankiduel.android.ui.theme.TextSecondary
 import com.ankiduel.shared.model.SocialAppCatalog
 import kotlinx.coroutines.launch
 
@@ -56,6 +84,10 @@ class LockOverlayActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
 
         // Le bouton Retour renvoie toujours à l'écran d'accueil pour empêcher de contourner le blocage
         onBackPressedDispatcher.addCallback(
@@ -77,8 +109,10 @@ class LockOverlayActivity : ComponentActivity() {
                 val lockStatus by BlockStateHolder.lockStatus.collectAsState()
                 val scope = rememberCoroutineScope()
 
-                if (!lockStatus.isLocked) {
-                    finish()
+                LaunchedEffect(lockStatus.isLocked) {
+                    if (!lockStatus.isLocked) {
+                        finish()
+                    }
                 }
 
                 LockScreenContent(
@@ -125,7 +159,7 @@ class LockOverlayActivity : ComponentActivity() {
 }
 
 @Composable
-private fun LockScreenContent(
+internal fun LockScreenContent(
     blockedAppName: String,
     debtMinutes: Int,
     duelTitle: String,
@@ -135,96 +169,203 @@ private fun LockScreenContent(
     onActivateJoker: () -> Unit,
     onGoHome: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF1A0D14), Color(0xFF0E1420), Color(0xFF0A0F1A))
-                )
-            )
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
+    val pulseTransition = rememberInfiniteTransition(label = "lockPulse")
+    val outerScale by pulseTransition.animateFloat(
+        initialValue = 0.96f,
+        targetValue = 1.06f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "lockScale"
+    )
+    val outerAlpha by pulseTransition.animateFloat(
+        initialValue = 0.10f,
+        targetValue = 0.22f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "lockAlpha"
+    )
+
+    AmbientGlowBackdrop(accentColor = SocialCoral, glowAlpha = 0.22f) {
         Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 26.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.fillMaxWidth()
+            verticalArrangement = Arrangement.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = null,
-                tint = SocialCoral,
-                modifier = Modifier.size(72.dp)
+            Spacer(Modifier.weight(1f))
+
+            // Concentric breathing lock emblem
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(116.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(116.dp)
+                        .scale(outerScale)
+                        .clip(CircleShape)
+                        .background(SocialCoral.copy(alpha = outerAlpha * 0.45f))
+                        .border(1.dp, SocialCoral.copy(alpha = outerAlpha), CircleShape)
+                )
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(SocialCoral.copy(alpha = 0.14f))
+                        .border(1.dp, SocialCoral.copy(alpha = 0.34f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lock,
+                        contentDescription = null,
+                        tint = SocialCoralSoft,
+                        modifier = Modifier.size(34.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(22.dp))
+
+            StatusPill(
+                text = "$blockedAppName verrouillé",
+                color = SocialCoralSoft,
+                showDot = true
             )
 
+            Spacer(Modifier.height(14.dp))
+
             Text(
-                text = "$blockedAppName est verrouillé",
+                text = "Pause révision requise",
                 style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = TextPrimary,
                 textAlign = TextAlign.Center
             )
 
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1B2436)),
-                shape = RoundedCornerShape(20.dp),
+            Spacer(Modifier.height(24.dp))
+
+            // Sculptural Debt Card
+            ObsidianCard(
+                shape = RoundedCornerShape(26.dp),
+                borderTint = SocialCoral,
+                borderAlpha = 0.28f,
+                accentGradientColor = SocialCoral,
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 24.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         text = "DETTE ANKIDROID ACTIVE",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SocialCoral
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SocialCoralSoft
                     )
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "$debtMinutes min à rattraper",
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color.White
+                        text = formatCompactMinutes(debtMinutes),
+                        style = MaterialTheme.typography.displaySmall.copy(
+                            fontSize = 44.sp,
+                            lineHeight = 50.sp,
+                            fontFeatureSettings = TabularFeatures
+                        ),
+                        color = TextPrimary
                     )
+                    Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "$duelTitle • $leaderName est devant vous",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFFB0BEC5),
+                        text = "à rattraper pour débloquer",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+
+                    Spacer(Modifier.height(18.dp))
+                    HorizontalDivider(color = HairlineBorderSubtle)
+                    Spacer(Modifier.height(14.dp))
+
+                    Text(
+                        text = "$duelTitle · $leaderName est en tête",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
                         textAlign = TextAlign.Center
                     )
                 }
             }
 
-            Button(
-                onClick = onOpenAnkiDroid,
-                colors = ButtonDefaults.buttonColors(containerColor = AnkiBlue),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-            ) {
-                Icon(Icons.Default.School, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Ouvrir AnkiDroid maintenant", fontWeight = FontWeight.Bold)
-            }
+            Spacer(Modifier.weight(1f))
 
-            if (canUseJoker) {
-                OutlinedButton(
-                    onClick = onActivateJoker,
-                    shape = RoundedCornerShape(14.dp),
+            // Action Stack
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = onOpenAnkiDroid,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AnkiBlue,
+                        contentColor = Color.White
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
+                        .height(54.dp)
                 ) {
-                    Icon(Icons.Default.Bolt, contentDescription = null, tint = AmberJoker)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Utiliser le Joker d'urgence (5 min)", color = AmberJoker)
+                    Icon(
+                        imageVector = Icons.Rounded.School,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Ouvrir AnkiDroid",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
-            }
 
-            TextButton(onClick = onGoHome) {
-                Text("Retourner à l'accueil", color = Color(0xFF90A4AE))
+                if (canUseJoker) {
+                    OutlinedButton(
+                        onClick = onActivateJoker,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, AmberJoker.copy(alpha = 0.42f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = AmberJoker.copy(alpha = 0.08f),
+                            contentColor = AmberJokerSoft
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Bolt,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Joker d'urgence (5 min)",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+
+                TextButton(
+                    onClick = onGoHome,
+                    modifier = Modifier.padding(top = 2.dp)
+                ) {
+                    Text(
+                        text = "Retourner à l'accueil",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextMuted
+                    )
+                }
             }
         }
     }

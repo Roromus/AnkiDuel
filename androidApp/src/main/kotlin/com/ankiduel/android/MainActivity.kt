@@ -2,21 +2,47 @@ package com.ankiduel.android
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.SpaceDashboard
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.SpaceDashboard
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,17 +54,45 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import com.ankiduel.android.service.DuelMonitorService
 import com.ankiduel.android.ui.AppViewModel
+import com.ankiduel.android.ui.components.AmbientGlowBackdrop
+import com.ankiduel.android.ui.components.AnkiDuelMark
+import com.ankiduel.android.ui.components.AnkiDuelSnackbarHost
 import com.ankiduel.android.ui.screens.AppsSettingsScreen
 import com.ankiduel.android.ui.screens.AuthScreen
 import com.ankiduel.android.ui.screens.DashboardScreen
 import com.ankiduel.android.ui.screens.DuelDetailScreen
 import com.ankiduel.android.ui.screens.DuelsScreen
 import com.ankiduel.android.ui.screens.PermissionsScreen
+import com.ankiduel.android.ui.theme.AnkiBlue
+import com.ankiduel.android.ui.theme.AnkiBlueSoft
 import com.ankiduel.android.ui.theme.AnkiDuelTheme
+import com.ankiduel.android.ui.theme.HairlineBorderSubtle
+import com.ankiduel.android.ui.theme.ObsidianBg
+import com.ankiduel.android.ui.theme.SocialCoral
+import com.ankiduel.android.ui.theme.SurfaceBase
+import com.ankiduel.android.ui.theme.TextMuted
 
-private enum class MainTab {
+private enum class MainTab(
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector
+) {
+    DASHBOARD("Accueil", Icons.Rounded.SpaceDashboard, Icons.Outlined.SpaceDashboard),
+    DUELS("Duels", Icons.Rounded.EmojiEvents, Icons.Outlined.EmojiEvents),
+    SETTINGS("Paramètres", Icons.Rounded.Tune, Icons.Outlined.Tune)
+}
+
+private enum class RootRoute {
+    AUTH,
+    PERMISSIONS,
+    DUEL_DETAIL,
     DASHBOARD,
     DUELS,
     SETTINGS
@@ -52,6 +106,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         runCatching { DuelMonitorService.start(this) }
 
         setContent {
@@ -91,40 +149,57 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
         }
     }
 
+    BackHandler(enabled = showPermissions) {
+        showPermissions = false
+    }
+
+    BackHandler(enabled = !showPermissions && selectedDuelId != null) {
+        selectedDuelId = null
+    }
+
     val currentSession = session
     if (currentSession == null) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+        AmbientGlowBackdrop(accentColor = AnkiBlue, glowAlpha = 0.14f) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                AnkiDuelMark(size = 72.dp)
+            }
         }
         return
     }
 
     val isAuthenticated = currentSession.demoMode || !currentSession.userId.isNullOrBlank()
+    val showBottomBar = isAuthenticated && !showPermissions && selectedDuelId == null
+
+    val activeRoute = when {
+        !isAuthenticated -> RootRoute.AUTH
+        showPermissions -> RootRoute.PERMISSIONS
+        selectedDuelId != null -> RootRoute.DUEL_DETAIL
+        currentTab == MainTab.DASHBOARD -> RootRoute.DASHBOARD
+        currentTab == MainTab.DUELS -> RootRoute.DUELS
+        else -> RootRoute.SETTINGS
+    }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = ObsidianBg,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = {
+            AnkiDuelSnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.then(
+                    if (!showBottomBar) Modifier.navigationBarsPadding() else Modifier
+                )
+            )
+        },
         bottomBar = {
-            if (isAuthenticated && !showPermissions && selectedDuelId == null) {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = currentTab == MainTab.DASHBOARD,
-                        onClick = { currentTab = MainTab.DASHBOARD },
-                        icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-                        label = { Text("Comparateur") }
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == MainTab.DUELS,
-                        onClick = { currentTab = MainTab.DUELS },
-                        icon = { Icon(Icons.Default.EmojiEvents, contentDescription = null) },
-                        label = { Text("Duels") }
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == MainTab.SETTINGS,
-                        onClick = { currentTab = MainTab.SETTINGS },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                        label = { Text("Apps") }
-                    )
-                }
+            if (showBottomBar) {
+                AnkiDuelBottomBar(
+                    currentTab = currentTab,
+                    hasActiveDebt = lockStatus.isLocked,
+                    onSelectTab = { currentTab = it }
+                )
             }
         }
     ) { innerPadding ->
@@ -133,85 +208,179 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when {
-                !isAuthenticated -> {
-                    AuthScreen(
-                        isBusy = isBusy,
-                        onLogin = viewModel::login,
-                        onRegister = viewModel::register,
-                        onStartDemo = viewModel::startDemoMode
-                    )
-                }
+            AnimatedContent(
+                targetState = activeRoute,
+                transitionSpec = {
+                    (fadeIn(animationSpec = tween(220)) +
+                        slideInVertically(animationSpec = tween(220)) { it / 32 })
+                        .togetherWith(fadeOut(animationSpec = tween(150)))
+                },
+                label = "rootNavigation"
+            ) { route ->
+                when (route) {
+                    RootRoute.AUTH -> {
+                        AuthScreen(
+                            isBusy = isBusy,
+                            onLogin = viewModel::login,
+                            onRegister = viewModel::register,
+                            onStartDemo = viewModel::startDemoMode
+                        )
+                    }
 
-                showPermissions -> {
-                    PermissionsScreen(
-                        health = health,
-                        onRefresh = { viewModel.refreshAll() },
-                        onContinue = { showPermissions = false }
-                    )
-                }
+                    RootRoute.PERMISSIONS -> {
+                        PermissionsScreen(
+                            health = health,
+                            onRefresh = { viewModel.refreshAll() },
+                            onContinue = { showPermissions = false }
+                        )
+                    }
 
-                selectedDuelId != null -> {
-                    val duel = duels.firstOrNull { it.duelId == selectedDuelId }
-                    if (duel == null) {
-                        selectedDuelId = null
-                    } else {
-                        DuelDetailScreen(
-                            duel = duel,
+                    RootRoute.DUEL_DETAIL -> {
+                        val duel = duels.firstOrNull { it.duelId == selectedDuelId }
+                        if (duel == null) {
+                            LaunchedEffect(Unit) { selectedDuelId = null }
+                        } else {
+                            DuelDetailScreen(
+                                duel = duel,
+                                userId = currentSession.userId.orEmpty(),
+                                onBack = { selectedDuelId = null },
+                                onActivateJoker = { viewModel.activateJoker(it) },
+                                onForfeit = {
+                                    viewModel.forfeitDuel(it)
+                                    selectedDuelId = null
+                                }
+                            )
+                        }
+                    }
+
+                    RootRoute.DASHBOARD -> {
+                        DashboardScreen(
+                            username = currentSession.username ?: "Joueur",
                             userId = currentSession.userId.orEmpty(),
-                            onBack = { selectedDuelId = null },
+                            demoMode = currentSession.demoMode,
+                            usage = usage,
+                            lockStatus = lockStatus,
+                            duels = duels,
+                            health = health,
+                            isIdleFlagged = isIdleFlagged,
+                            onRefresh = { viewModel.refreshAll() },
+                            onOpenPermissions = { showPermissions = true },
+                            onDuelClick = { selectedDuelId = it },
                             onActivateJoker = { viewModel.activateJoker(it) },
-                            onForfeit = {
-                                viewModel.forfeitDuel(it)
+                            onAddDemoAnki = { viewModel.addDemoAnkiMinutes(it) },
+                            onAddDemoSocial = { viewModel.addDemoSocialMinutes(it) }
+                        )
+                    }
+
+                    RootRoute.DUELS -> {
+                        DuelsScreen(
+                            userId = currentSession.userId.orEmpty(),
+                            duels = duels,
+                            onCreateDuel = { config -> viewModel.createDuel(config) },
+                            onJoinDuel = { code -> viewModel.joinDuel(code) },
+                            onSelectDuel = { selectedDuelId = it }
+                        )
+                    }
+
+                    RootRoute.SETTINGS -> {
+                        AppsSettingsScreen(
+                            installedApps = installedApps,
+                            trackedPackages = currentSession.trackedSocialPackages,
+                            mandatoryPackages = viewModel.activeMandatoryPackages(),
+                            hasActiveDuel = viewModel.hasActiveDuel(),
+                            userEmail = currentSession.email,
+                            demoMode = currentSession.demoMode,
+                            onTogglePackage = viewModel::toggleSocialPackage,
+                            onOpenPermissions = { showPermissions = true },
+                            onLogout = {
                                 selectedDuelId = null
+                                viewModel.logout()
                             }
                         )
                     }
                 }
+            }
+        }
+    }
+}
 
-                currentTab == MainTab.DASHBOARD -> {
-                    DashboardScreen(
-                        username = currentSession.username ?: "Joueur",
-                        userId = currentSession.userId.orEmpty(),
-                        demoMode = currentSession.demoMode,
-                        usage = usage,
-                        lockStatus = lockStatus,
-                        duels = duels,
-                        health = health,
-                        isIdleFlagged = isIdleFlagged,
-                        onRefresh = { viewModel.refreshAll() },
-                        onOpenPermissions = { showPermissions = true },
-                        onDuelClick = { selectedDuelId = it },
-                        onActivateJoker = { viewModel.activateJoker(it) },
-                        onAddDemoAnki = { viewModel.addDemoAnkiMinutes(it) },
-                        onAddDemoSocial = { viewModel.addDemoSocialMinutes(it) }
-                    )
-                }
+@Composable
+private fun AnkiDuelBottomBar(
+    currentTab: MainTab,
+    hasActiveDebt: Boolean,
+    onSelectTab: (MainTab) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SurfaceBase.copy(alpha = 0.96f))
+            .navigationBarsPadding()
+    ) {
+        HorizontalDivider(color = HairlineBorderSubtle)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            MainTab.entries.forEach { tab ->
+                val selected = tab == currentTab
+                val contentColor by animateColorAsState(
+                    targetValue = if (selected) AnkiBlueSoft else TextMuted,
+                    animationSpec = tween(200),
+                    label = "tabColor"
+                )
+                val pillBg by animateColorAsState(
+                    targetValue = if (selected) AnkiBlue.copy(alpha = 0.14f) else Color.Transparent,
+                    animationSpec = tween(200),
+                    label = "tabPill"
+                )
 
-                currentTab == MainTab.DUELS -> {
-                    DuelsScreen(
-                        userId = currentSession.userId.orEmpty(),
-                        duels = duels,
-                        onCreateDuel = { config -> viewModel.createDuel(config) },
-                        onJoinDuel = { code -> viewModel.joinDuel(code) },
-                        onSelectDuel = { selectedDuelId = it }
-                    )
-                }
-
-                currentTab == MainTab.SETTINGS -> {
-                    AppsSettingsScreen(
-                        installedApps = installedApps,
-                        trackedPackages = currentSession.trackedSocialPackages,
-                        mandatoryPackages = viewModel.activeMandatoryPackages(),
-                        hasActiveDuel = viewModel.hasActiveDuel(),
-                        userEmail = currentSession.email,
-                        demoMode = currentSession.demoMode,
-                        onTogglePackage = viewModel::toggleSocialPackage,
-                        onOpenPermissions = { showPermissions = true },
-                        onLogout = {
-                            selectedDuelId = null
-                            viewModel.logout()
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { onSelectTab(tab) }
+                        )
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(52.dp)
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(pillBg),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                            contentDescription = tab.label,
+                            tint = contentColor,
+                            modifier = Modifier.size(21.dp)
+                        )
+                        if (tab == MainTab.DUELS && hasActiveDebt && !selected) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 4.dp, end = 12.dp)
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(SocialCoral)
+                            )
                         }
+                    }
+                    Text(
+                        text = tab.label,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+                        ),
+                        color = contentColor
                     )
                 }
             }

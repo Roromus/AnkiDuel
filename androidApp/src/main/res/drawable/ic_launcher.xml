@@ -1,15 +1,64 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Deep Obsidian Backdrop -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="108"
+                android:endY="108"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#101829" android:offset="0.0" />
+                <item android:color="#070A10" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Subtle radial ambient glow -->
+    <path android:pathData="M54,12 A42,42 0 1,0 54,96 A42,42 0 1,0 54,12 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="48"
+                android:gradientRadius="40"
+                android:type="radial">
+                <item android:color="#333B82F6" android:offset="0.0" />
+                <item android:color="#003B82F6" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Sculptural Shield (strictly within 66dp circular adaptive safe zone) -->
+    <path android:pathData="M54,23 L78,32.5 V53.5 C78,69.5 67.5,80.5 54,85.5 C40.5,80.5 30,69.5 30,53.5 V32.5 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="72"
+                android:endY="85"
+                android:startX="36"
+                android:startY="23"
+                android:type="linear">
+                <item android:color="#60A5FA" android:offset="0.0" />
+                <item android:color="#2563EB" android:offset="0.58" />
+                <item android:color="#1D4ED8" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner Shield Rim Highlight -->
     <path
-        android:fillColor="#0E1420"
-        android:pathData="M0,0h108v108h-108z" />
+        android:fillColor="#00000000"
+        android:pathData="M54,25.8 L75.4,34.4 V53.5 C75.4,67.8 66,77.8 54,82.4 C42,77.8 32.6,67.8 32.6,53.5 V34.4 Z"
+        android:strokeWidth="1.1"
+        android:strokeColor="#4DFFFFFF" />
+
+    <!-- Crisp Luminous Four-Point Focus Star -->
     <path
-        android:fillColor="#2979FF"
-        android:pathData="M54,18 L82,30 V54 C82,73 69,86 54,92 C39,86 26,73 26,54 V30 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,32 L59,46 L74,47 L62,56 L66,70 L54,62 L42,70 L46,56 L34,47 L49,46 Z" />
+        android:fillColor="#F8FAFC"
+        android:pathData="M54,37 C55.5,46.8 57.9,49.2 67.5,50.8 C57.9,52.3 55.5,54.7 54,64.5 C52.5,54.7 50.1,52.3 40.5,50.8 C50.1,49.2 52.5,46.8 54,37 Z" />
 </vector>

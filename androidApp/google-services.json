@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "448151775685",
+    "project_id": "ankiduel",
+    "storage_bucket": "ankiduel.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:448151775685:android:7672c3dac117b37bf903ac",
+        "android_client_info": {
+          "package_name": "com.ankiduel.android"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBe5XrYfi-wt5De9Mc_iAT9EU6r5Ks1ORU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

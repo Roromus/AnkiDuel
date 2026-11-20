@@ -359,7 +359,7 @@ class AnkiDuelRepository(
                 remoteDuels.map { duel ->
                     if (duel.status == DuelStatus.ACTIVE) {
                         runCatching {
-                            firebase.syncUsage(duel.duelId, current.userId, snapshot)
+                            firebase.syncUsage(duel.duelId, current.userId, snapshot, _todayDevices.value)
                         }.getOrDefault(duel)
                     } else duel
                 }

@@ -218,7 +218,12 @@ class FirebaseBackendClient(
         awaitClose { registration.remove() }
     }
 
-    suspend fun syncUsage(duelId: String, userId: String, snapshot: UsageSnapshot): DuelState {
+    suspend fun syncUsage(
+        duelId: String,
+        userId: String,
+        snapshot: UsageSnapshot,
+        accountDevices: List<DeviceDailyContribution> = emptyList()
+    ): DuelState {
         val docRef = duelsCol.document(duelId)
         return firestore.runTransaction { tx ->
             val doc = tx.get(docRef)
@@ -343,10 +348,32 @@ class FirebaseBackendClient(
                         )
                     }
 
-                    val nextContributions = (existingContributions + (deviceKey to updatedDevice))
+                    val mergedContributions = existingContributions.toMutableMap()
+                    accountDevices
+                        .filter { it.dayKey == todayKey && it.deviceId.isNotBlank() }
+                        .forEach { acctDev ->
+                            val existing = mergedContributions[acctDev.deviceId]
+                            mergedContributions[acctDev.deviceId] = if (existing == null) {
+                                acctDev
+                            } else {
+                                existing.copy(
+                                    deviceName = acctDev.deviceName.ifBlank { existing.deviceName },
+                                    ankiEffectiveSeconds = maxOf(existing.ankiEffectiveSeconds, acctDev.ankiEffectiveSeconds),
+                                    cardsReviewed = maxOf(existing.cardsReviewed, acctDev.cardsReviewed),
+                                    socialSeconds = maxOf(existing.socialSeconds, acctDev.socialSeconds),
+                                    permissionsHealthy = existing.permissionsHealthy && acctDev.permissionsHealthy,
+                                    appHealthOk = if (acctDev.lastSyncEpochMs >= existing.lastSyncEpochMs) acctDev.appHealthOk else existing.appHealthOk,
+                                    appHealthIssue = if (acctDev.lastSyncEpochMs >= existing.lastSyncEpochMs) acctDev.appHealthIssue else existing.appHealthIssue,
+                                    lastSyncEpochMs = maxOf(existing.lastSyncEpochMs, acctDev.lastSyncEpochMs)
+                                )
+                            }
+                        }
+                    mergedContributions[deviceKey] = updatedDevice
+
+                    val nextContributions = mergedContributions
                         .entries
                         .sortedByDescending { it.value.lastSyncEpochMs }
-                        .take(5)
+                        .take(3)
                         .associate { it.key to it.value }
 
                     val todayAnkiCombined = nextContributions.values.sumOf { it.ankiEffectiveSeconds }

@@ -478,10 +478,16 @@ private fun TrackingDiagnosticCard(
 
     val rawMin = diagnostics.rawAnkiSeconds / 60L
     val rawRemSec = diagnostics.rawAnkiSeconds % 60L
+    val eventsMin = diagnostics.eventsAnkiSeconds / 60L
+    val eventsRemSec = diagnostics.eventsAnkiSeconds % 60L
+    val dailyMin = diagnostics.dailyStatsAnkiSeconds / 60L
+    val dailyRemSec = diagnostics.dailyStatsAnkiSeconds % 60L
     val effMin = diagnostics.effectiveAnkiSeconds / 60L
     val effRemSec = diagnostics.effectiveAnkiSeconds % 60L
+    val cappedMin = diagnostics.idleCappedSeconds / 60L
+    val cappedRemSec = diagnostics.idleCappedSeconds % 60L
     val sourceLabel = if (diagnostics.usedDailyStatsFallback) {
-        "UsageStats quotidien (secours)"
+        "UsageStats quotidien prioritaire"
     } else {
         "${diagnostics.ankiEventCount} événements aujourd'hui"
     }
@@ -503,8 +509,16 @@ private fun TrackingDiagnosticCard(
                 value = "${rawMin}m ${rawRemSec}s ($sourceLabel)"
             )
             DiagnosticRow(
+                label = "Détail sources",
+                value = "Events ${eventsMin}m ${eventsRemSec}s · Jour ${dailyMin}m ${dailyRemSec}s"
+            )
+            DiagnosticRow(
                 label = "Temps Anki validé",
-                value = "${effMin}m ${effRemSec}s"
+                value = if (diagnostics.idleCappedSeconds > 0L) {
+                    "${effMin}m ${effRemSec}s (-${cappedMin}m ${cappedRemSec}s inactif)"
+                } else {
+                    "${effMin}m ${effRemSec}s"
+                }
             )
             DiagnosticRow(
                 label = "API AnkiDroid",

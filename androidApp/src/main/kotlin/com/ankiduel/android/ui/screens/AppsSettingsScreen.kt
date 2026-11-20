@@ -53,6 +53,7 @@ import com.ankiduel.android.ui.components.ObsidianTextField
 import com.ankiduel.android.ui.components.PlayerAvatar
 import com.ankiduel.android.ui.components.SectionHeader
 import com.ankiduel.android.ui.components.StatusPill
+import com.ankiduel.android.ui.components.formatCompactMinutes
 import com.ankiduel.android.ui.theme.AmberJoker
 import com.ankiduel.android.ui.theme.AmberJokerSoft
 import com.ankiduel.android.ui.theme.AnkiBlue
@@ -66,6 +67,7 @@ import com.ankiduel.android.ui.theme.SurfaceBase
 import com.ankiduel.android.ui.theme.TextMuted
 import com.ankiduel.android.ui.theme.TextPrimary
 import com.ankiduel.android.ui.theme.TextSecondary
+import com.ankiduel.shared.model.DeviceDailyContribution
 import com.ankiduel.shared.model.SocialAppCatalog
 
 @Composable
@@ -76,6 +78,7 @@ fun AppsSettingsScreen(
     hasActiveDuel: Boolean,
     userEmail: String?,
     demoMode: Boolean,
+    todayDevices: List<DeviceDailyContribution> = emptyList(),
     onTogglePackage: (String) -> Unit,
     onOpenPermissions: () -> Unit,
     onLogout: () -> Unit
@@ -195,6 +198,66 @@ fun AppsSettingsScreen(
                         subtitle = if (demoMode) "Revenir à l'écran de connexion" else "Fermer votre session actuelle",
                         onClick = onLogout
                     )
+                }
+            }
+
+            if (todayDevices.isNotEmpty()) {
+                item(key = "devices_card") {
+                    ObsidianCard(
+                        shape = RoundedCornerShape(22.dp),
+                        contentPadding = PaddingValues(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        SectionHeader(
+                            title = "Appareils du jour",
+                            trailing = {
+                                StatusPill(
+                                    text = "${todayDevices.size}",
+                                    color = AnkiBlueSoft
+                                )
+                            }
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            todayDevices.forEach { dev ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(SurfaceBase)
+                                        .border(1.dp, HairlineBorderSubtle, RoundedCornerShape(12.dp))
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = dev.deviceName.ifBlank { "Appareil Android" },
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "Anki ${formatCompactMinutes((dev.ankiEffectiveSeconds / 60L).toInt())} · ${dev.cardsReviewed} cartes · Réseaux ${formatCompactMinutes((dev.socialSeconds / 60L).toInt())}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    StatusPill(
+                                        text = if (dev.appHealthOk) "OK" else "Config",
+                                        color = if (dev.appHealthOk) SafeEmeraldSoft else SocialCoralSoft
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

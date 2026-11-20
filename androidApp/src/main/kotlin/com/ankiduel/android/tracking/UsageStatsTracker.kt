@@ -20,7 +20,16 @@ data class ForegroundEvent(
     val packageName: String,
     val eventType: Int,
     val timestampMs: Long,
-    val className: String = ""
+    val className: String = "",
+    val instanceId: Int = 0
+)
+
+data class DailyBucketEntry(
+    val packageName: String,
+    val firstTimeStamp: Long,
+    val lastTimeStamp: Long,
+    val lastTimeUsed: Long,
+    val totalTimeInForegroundMs: Long
 )
 
 data class DailyUsageMeasurement(
@@ -28,7 +37,9 @@ data class DailyUsageMeasurement(
     val socialForegroundSeconds: Long,
     val socialBreakdownSeconds: Map<String, Long>,
     val ankiEventCount: Int = 0,
-    val usedDailyStatsFallback: Boolean = false
+    val usedDailyStatsFallback: Boolean = false,
+    val eventsAnkiSeconds: Long = ankiForegroundSeconds,
+    val dailyStatsAnkiSeconds: Long = 0L
 )
 
 class UsageStatsTracker(private val context: Context) {
@@ -58,12 +69,14 @@ class UsageStatsTracker(private val context: Context) {
         val event = UsageEvents.Event()
         while (usageEvents.hasNextEvent()) {
             usageEvents.getNextEvent(event)
+            val instId = 0
             extracted.add(
                 ForegroundEvent(
                     packageName = event.packageName.orEmpty(),
                     eventType = event.eventType,
                     timestampMs = event.timeStamp,
-                    className = event.className.orEmpty()
+                    className = event.className.orEmpty(),
+                    instanceId = instId
                 )
             )
         }
@@ -87,27 +100,21 @@ class UsageStatsTracker(private val context: Context) {
             it.packageName in ankiPackages && it.timestampMs >= midnightMs
         }
 
-        var ankiSec = ankiPackages.sumOf { secondsByPackage[it] ?: 0L }
-        var usedDailyFallback = false
+        val eventsAnkiSec = ankiPackages.sumOf { secondsByPackage[it] ?: 0L }
 
-        // Secours sur certains appareils OEM dont queryEvents omet des événements RESUMED :
-        // on ne consulte queryUsageStats que si queryEvents a renvoyé 0s et sur un bucket strictement du jour.
-        if (ankiSec == 0L || trackedSocialPackages.any { (secondsByPackage[it] ?: 0L) == 0L }) {
-            val dailyBuckets = queryStrictTodayUsageStats(usageStatsManager, midnightMs, nowMs)
-            if (ankiSec == 0L) {
-                val dailyAnkiSec = ankiPackages.sumOf { dailyBuckets[it] ?: 0L }
-                if (dailyAnkiSec > 0L) {
-                    ankiSec = dailyAnkiSec
-                    usedDailyFallback = true
-                }
-            }
-            for (pkg in trackedSocialPackages) {
-                if ((secondsByPackage[pkg] ?: 0L) == 0L) {
-                    val dailyPkgSec = dailyBuckets[pkg] ?: 0L
-                    if (dailyPkgSec > 0L) {
-                        secondsByPackage[pkg] = dailyPkgSec
-                    }
-                }
+        // Toujours croiser avec les buckets quotidiens strictement du jour :
+        // si queryEvents a évincé des événements plus tôt dans la journée ou omis un RESUMED
+        // (ex: OEM, changement d'écran, redémarrage), le bucket officiel Android conserve le vrai cumul.
+        val dailyBuckets = queryStrictTodayUsageStats(usageStatsManager, midnightMs, nowMs)
+        val dailyAnkiSec = ankiPackages.sumOf { dailyBuckets[it] ?: 0L }
+        val usedDailyFallback = dailyAnkiSec > eventsAnkiSec
+        val ankiSec = maxOf(eventsAnkiSec, dailyAnkiSec)
+
+        for (pkg in trackedSocialPackages) {
+            val eventsPkgSec = secondsByPackage[pkg] ?: 0L
+            val dailyPkgSec = dailyBuckets[pkg] ?: 0L
+            if (dailyPkgSec > eventsPkgSec) {
+                secondsByPackage[pkg] = dailyPkgSec
             }
         }
 
@@ -121,7 +128,9 @@ class UsageStatsTracker(private val context: Context) {
             socialForegroundSeconds = totalSocial,
             socialBreakdownSeconds = socialMap,
             ankiEventCount = ankiEventCount,
-            usedDailyStatsFallback = usedDailyFallback
+            usedDailyStatsFallback = usedDailyFallback,
+            eventsAnkiSeconds = eventsAnkiSec,
+            dailyStatsAnkiSeconds = dailyAnkiSec
         )
     }
 
@@ -136,21 +145,17 @@ class UsageStatsTracker(private val context: Context) {
 
         if (stats.isEmpty()) return emptyMap()
 
-        val totalsByPkg = mutableMapOf<String, Long>()
-        for (stat in stats) {
-            val pkg = stat.packageName ?: continue
-            // Ne jamais inclure un bucket ayant commencé hier (risque de fausser la remise à zéro à minuit)
-            val startedToday = stat.firstTimeStamp >= midnightMs - DAILY_BUCKET_TOLERANCE_MS
-            val usedToday = stat.lastTimeUsed >= midnightMs
-            if (startedToday && usedToday && stat.totalTimeInForeground > 0L) {
-                val sec = stat.totalTimeInForeground / 1000L
-                val existing = totalsByPkg[pkg] ?: 0L
-                if (sec > existing) {
-                    totalsByPkg[pkg] = sec
-                }
-            }
+        val entries = stats.mapNotNull { stat ->
+            val pkg = stat.packageName ?: return@mapNotNull null
+            DailyBucketEntry(
+                packageName = pkg,
+                firstTimeStamp = stat.firstTimeStamp,
+                lastTimeStamp = stat.lastTimeStamp,
+                lastTimeUsed = stat.lastTimeUsed,
+                totalTimeInForegroundMs = stat.totalTimeInForeground
+            )
         }
-        return totalsByPkg
+        return aggregateStrictTodayBuckets(entries, midnightMs, nowMs)
     }
 
     fun listLaunchableApps(): List<InstalledAppItem> {
@@ -192,12 +197,77 @@ class UsageStatsTracker(private val context: Context) {
         private const val EVENT_ACTIVITY_PAUSED = 2
         private const val EVENT_SCREEN_NON_INTERACTIVE = 16
         private const val EVENT_KEYGUARD_SHOWN = 17
+        private const val EVENT_KEYGUARD_HIDDEN = 18
         private const val EVENT_ACTIVITY_STOPPED = 23
         private const val EVENT_DEVICE_SHUTDOWN = 26
 
         private const val LOOKBACK_BEFORE_MIDNIGHT_MS = 6L * 3600L * 1000L
         private const val DAILY_BUCKET_TOLERANCE_MS = 5L * 60L * 1000L
+        private const val STALE_STOPPED_WINDOW_MS = 30L * 1000L
         private const val DEFAULT_CLASS_KEY = "<default>"
+
+        fun aggregateStrictTodayBuckets(
+            buckets: List<DailyBucketEntry>,
+            midnightMs: Long,
+            nowMs: Long
+        ): Map<String, Long> {
+            val maxElapsedSec = ((nowMs - midnightMs) / 1000L).coerceAtLeast(0L)
+            if (maxElapsedSec == 0L || buckets.isEmpty()) return emptyMap()
+
+            val validByPkg = buckets
+                .filter { b ->
+                    val startedToday = b.firstTimeStamp >= midnightMs - DAILY_BUCKET_TOLERANCE_MS
+                    val usedToday = b.lastTimeUsed >= midnightMs
+                    val notFuture = b.lastTimeStamp <= nowMs + DAILY_BUCKET_TOLERANCE_MS
+                    startedToday && usedToday && notFuture && b.totalTimeInForegroundMs > 0L
+                }
+                .groupBy { it.packageName }
+
+            val totalsByPkg = mutableMapOf<String, Long>()
+            for ((pkg, pkgBuckets) in validByPkg) {
+                val sorted = pkgBuckets.sortedWith(
+                    compareBy<DailyBucketEntry> { it.firstTimeStamp }
+                        .thenByDescending { it.lastTimeStamp }
+                )
+                var totalMs = 0L
+                var currentSpanEnd = Long.MIN_VALUE
+                var currentSpanMaxMs = 0L
+
+                for (bucket in sorted) {
+                    val bucketEnd = maxOf(bucket.lastTimeStamp, bucket.firstTimeStamp)
+                    if (currentSpanEnd == Long.MIN_VALUE) {
+                        currentSpanEnd = bucketEnd
+                        currentSpanMaxMs = bucket.totalTimeInForegroundMs
+                    } else if (bucket.firstTimeStamp >= currentSpanEnd - 1_000L) {
+                        // Bucket distinct non chevauchant (ex: après redémarrage en cours de journée)
+                        totalMs += currentSpanMaxMs
+                        currentSpanEnd = bucketEnd
+                        currentSpanMaxMs = bucket.totalTimeInForegroundMs
+                    } else {
+                        // Buckets chevauchants : garder le maximum pour éviter un double comptage
+                        currentSpanEnd = maxOf(currentSpanEnd, bucketEnd)
+                        currentSpanMaxMs = maxOf(currentSpanMaxMs, bucket.totalTimeInForegroundMs)
+                    }
+                }
+                if (currentSpanEnd != Long.MIN_VALUE) {
+                    totalMs += currentSpanMaxMs
+                }
+
+                val sec = (totalMs / 1000L).coerceAtMost(maxElapsedSec)
+                if (sec > 0L) {
+                    totalsByPkg[pkg] = sec
+                }
+            }
+            return totalsByPkg
+        }
+
+        private fun activityKey(ev: ForegroundEvent): String {
+            return if (ev.instanceId != 0) {
+                "inst:${ev.instanceId}"
+            } else {
+                "cls:${ev.className.ifBlank { DEFAULT_CLASS_KEY }}"
+            }
+        }
 
         fun computeForegroundSecondsFromEvents(
             events: List<ForegroundEvent>,
@@ -206,12 +276,14 @@ class UsageStatsTracker(private val context: Context) {
             windowEndMs: Long
         ): Map<String, Long> {
             val activeStartByPkg = mutableMapOf<String, Long>()
-            val activeClassesByPkg = mutableMapOf<String, MutableSet<String>>()
+            val activeInstancesByPkg = mutableMapOf<String, MutableSet<String>>()
+            val suspendedByKeyguard = mutableMapOf<String, MutableSet<String>>()
+            val pendingStopsByPkgClass = mutableMapOf<Pair<String, String>, ArrayDeque<Long>>()
             val accumulatedMs = mutableMapOf<String, Long>()
 
             fun closePackage(pkg: String, endTs: Long) {
                 val startTs = activeStartByPkg.remove(pkg)
-                activeClassesByPkg.remove(pkg)
+                activeInstancesByPkg.remove(pkg)
                 if (startTs != null) {
                     val effectiveStart = maxOf(startTs, windowStartMs)
                     val effectiveEnd = minOf(endTs, windowEndMs)
@@ -234,6 +306,9 @@ class UsageStatsTracker(private val context: Context) {
 
                 when (ev.eventType) {
                     EVENT_ACTIVITY_RESUMED -> {
+                        // Une vraie reprise d'activité remplace toute suspension par l'écran de verrouillage
+                        suspendedByKeyguard.clear()
+
                         // Clôturer toute autre application restée ouverte
                         activeStartByPkg.keys.toList().forEach { openPkg ->
                             if (openPkg != ev.packageName) {
@@ -241,9 +316,9 @@ class UsageStatsTracker(private val context: Context) {
                             }
                         }
                         if (ev.packageName in targetPackages) {
-                            val clsKey = ev.className.ifBlank { DEFAULT_CLASS_KEY }
-                            val classes = activeClassesByPkg.getOrPut(ev.packageName) { mutableSetOf() }
-                            classes.add(clsKey)
+                            val key = activityKey(ev)
+                            val instances = activeInstancesByPkg.getOrPut(ev.packageName) { mutableSetOf() }
+                            instances.add(key)
                             if (!activeStartByPkg.containsKey(ev.packageName)) {
                                 activeStartByPkg[ev.packageName] = ev.timestampMs
                             }
@@ -252,23 +327,90 @@ class UsageStatsTracker(private val context: Context) {
 
                     EVENT_ACTIVITY_PAUSED, EVENT_ACTIVITY_STOPPED -> {
                         val pkg = ev.packageName
+                        val key = activityKey(ev)
+                        val clsKey = ev.className.ifBlank { DEFAULT_CLASS_KEY }
+
+                        // Si l'activité s'est réellement mise en pause/arrêtée sous le keyguard, ne pas la rouvrir au déverrouillage
+                        suspendedByKeyguard[pkg]?.let { suspended ->
+                            if (ev.eventType == EVENT_ACTIVITY_PAUSED && ev.instanceId == 0 && ev.className.isBlank()) {
+                                suspendedByKeyguard.remove(pkg)
+                            } else {
+                                suspended.remove(key)
+                                if (suspended.isEmpty()) suspendedByKeyguard.remove(pkg)
+                            }
+                        }
+
+                        if (ev.eventType == EVENT_ACTIVITY_PAUSED && ev.instanceId == 0) {
+                            val queue = pendingStopsByPkgClass.getOrPut(pkg to clsKey) { ArrayDeque() }
+                            queue.addLast(ev.timestampMs)
+                            while (queue.size > 16) queue.removeFirst()
+                        }
+
                         if (activeStartByPkg.containsKey(pkg)) {
-                            val classes = activeClassesByPkg[pkg]
-                            val clsKey = ev.className.ifBlank { DEFAULT_CLASS_KEY }
-                            if (ev.eventType == EVENT_ACTIVITY_PAUSED && ev.className.isBlank()) {
+                            val instances = activeInstancesByPkg[pkg]
+                            if (ev.eventType == EVENT_ACTIVITY_PAUSED && ev.instanceId == 0 && ev.className.isBlank()) {
                                 // Certains appareils OEM omettent className sur ACTIVITY_PAUSED
                                 closePackage(pkg, ev.timestampMs)
-                            } else if (classes != null && classes.remove(clsKey)) {
-                                if (classes.isEmpty()) {
+                            } else if (ev.eventType == EVENT_ACTIVITY_STOPPED && ev.instanceId == 0) {
+                                // Un STOPPED tardif correspondant à un PAUSED récent d'une ancienne instance
+                                // de la même classe (ex: Reviewer deck 1 -> DeckPicker -> Reviewer deck 2)
+                                // ne doit pas clôturer la nouvelle instance active.
+                                val queue = pendingStopsByPkgClass[pkg to clsKey]
+                                while (queue != null && queue.isNotEmpty() && ev.timestampMs - queue.first() > STALE_STOPPED_WINDOW_MS) {
+                                    queue.removeFirst()
+                                }
+                                if (queue != null && queue.isNotEmpty()) {
+                                    queue.removeFirst()
+                                } else if (instances != null && instances.remove(key)) {
+                                    if (instances.isEmpty()) {
+                                        closePackage(pkg, ev.timestampMs)
+                                    }
+                                }
+                            } else if (instances != null && instances.remove(key)) {
+                                if (instances.isEmpty()) {
                                     closePackage(pkg, ev.timestampMs)
                                 }
-                            } else if (ev.eventType == EVENT_ACTIVITY_PAUSED && (classes == null || classes.isEmpty())) {
+                            } else if (ev.eventType == EVENT_ACTIVITY_PAUSED && (instances == null || instances.isEmpty())) {
                                 closePackage(pkg, ev.timestampMs)
+                            }
+                        } else if (ev.eventType == EVENT_ACTIVITY_STOPPED && ev.instanceId == 0) {
+                            // Consommer le PAUSED correspondant même si le package est déjà fermé
+                            val queue = pendingStopsByPkgClass[pkg to clsKey]
+                            while (queue != null && queue.isNotEmpty() && ev.timestampMs - queue.first() > STALE_STOPPED_WINDOW_MS) {
+                                queue.removeFirst()
+                            }
+                            if (queue != null && queue.isNotEmpty()) {
+                                queue.removeFirst()
                             }
                         }
                     }
 
-                    EVENT_SCREEN_NON_INTERACTIVE, EVENT_KEYGUARD_SHOWN, EVENT_DEVICE_SHUTDOWN -> {
+                    EVENT_KEYGUARD_SHOWN -> {
+                        // Sauvegarder les activités encore actives (non pausées) pour récupérer en cas de race
+                        // KEYGUARD_SHOWN -> KEYGUARD_HIDDEN sans nouveau ACTIVITY_RESUMED (déverrouillage rapide).
+                        suspendedByKeyguard.clear()
+                        for ((pkg, instances) in activeInstancesByPkg) {
+                            if (instances.isNotEmpty()) {
+                                suspendedByKeyguard[pkg] = instances.toMutableSet()
+                            }
+                        }
+                        closeAllPackages(ev.timestampMs)
+                    }
+
+                    EVENT_KEYGUARD_HIDDEN -> {
+                        if (activeStartByPkg.isEmpty() && suspendedByKeyguard.isNotEmpty()) {
+                            for ((pkg, instances) in suspendedByKeyguard) {
+                                if (pkg in targetPackages && instances.isNotEmpty()) {
+                                    activeStartByPkg[pkg] = ev.timestampMs
+                                    activeInstancesByPkg[pkg] = instances.toMutableSet()
+                                }
+                            }
+                        }
+                        suspendedByKeyguard.clear()
+                    }
+
+                    EVENT_SCREEN_NON_INTERACTIVE, EVENT_DEVICE_SHUTDOWN -> {
+                        suspendedByKeyguard.clear()
                         closeAllPackages(ev.timestampMs)
                     }
                 }

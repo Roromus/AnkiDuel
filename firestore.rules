@@ -48,6 +48,20 @@ rules_version = '2';
 //   - netScoreSeconds: int (required, -864000..864000) - Daily net score in seconds
 //   - updatedAtEpochMs: int (required, >= 0) - Last sync timestamp in epoch ms
 //
+// Subcollection: userStats/{userId}/devices
+// Document ID: {deviceId} (1..128 chars)
+// Privacy: Strictly owner-only read and write (multi-device daily aggregation).
+// Fields (exact 9 keys):
+//   - userId: string (required, immutable, == userId, 1..128 chars) - Firebase Auth UID
+//   - deviceId: string (required, immutable, == deviceId, 1..128 chars) - Device identifier
+//   - deviceName: string (required, 0..128 chars) - Human-readable device name
+//   - dayKey: string (required, YYYY-MM-DD, 10 chars) - Calendar day key
+//   - ankiEffectiveSeconds: int (required, 0..86400) - Effective Anki study seconds
+//   - cardsReviewed: int (required, 0..100000) - Number of Anki cards reviewed
+//   - socialSeconds: int (required, 0..86400) - Social/blocked app usage seconds
+//   - appHealthOk: bool (required) - Whether tracking permissions/health are OK
+//   - lastSyncEpochMs: int (required, >= 0) - Last sync timestamp in epoch ms
+//
 // ===============================================================
 
 service cloud.firestore {
@@ -269,6 +283,41 @@ service cloud.firestore {
              data.updatedAtEpochMs >= 0;
     }
 
+    function isValidUserDeviceStats(data, userId, deviceId) {
+      let allowedFields = [
+        'userId',
+        'deviceId',
+        'deviceName',
+        'dayKey',
+        'ankiEffectiveSeconds',
+        'cardsReviewed',
+        'socialSeconds',
+        'appHealthOk',
+        'lastSyncEpochMs'
+      ];
+      return hasRequiredFields(allowedFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             isBoundedString(data.userId, 1, 128) &&
+             data.userId == userId &&
+             isBoundedString(data.deviceId, 1, 128) &&
+             data.deviceId == deviceId &&
+             isBoundedString(data.deviceName, 0, 128) &&
+             isBoundedString(data.dayKey, 10, 10) &&
+             data.dayKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+             data.ankiEffectiveSeconds is int &&
+             data.ankiEffectiveSeconds >= 0 &&
+             data.ankiEffectiveSeconds <= 86400 &&
+             data.cardsReviewed is int &&
+             data.cardsReviewed >= 0 &&
+             data.cardsReviewed <= 100000 &&
+             data.socialSeconds is int &&
+             data.socialSeconds >= 0 &&
+             data.socialSeconds <= 86400 &&
+             data.appHealthOk is bool &&
+             data.lastSyncEpochMs is int &&
+             data.lastSyncEpochMs >= 0;
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -311,6 +360,20 @@ service cloud.firestore {
                        isValidUserDayStats(request.resource.data, userId, dayKey) &&
                        uidNotModified() &&
                        areImmutableFieldsUnchanged(['userId', 'dayKey']);
+      allow delete: if isOwner(userId);
+    }
+
+    // Per-device daily study/usage contributions for multi-device daily aggregation.
+    // Strictly private to the owning user.
+    match /userStats/{userId}/devices/{deviceId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) &&
+                       isValidUserDeviceStats(request.resource.data, userId, deviceId) &&
+                       uidUnchanged(userId);
+      allow update: if isOwner(userId) &&
+                       isValidUserDeviceStats(request.resource.data, userId, deviceId) &&
+                       uidNotModified() &&
+                       areImmutableFieldsUnchanged(['userId', 'deviceId']);
       allow delete: if isOwner(userId);
     }
 

@@ -2,6 +2,7 @@ package com.ankiduel.android.data
 
 import com.ankiduel.shared.engine.DuelDeltaCalculator
 import com.ankiduel.shared.model.DailyStatRecord
+import com.ankiduel.shared.model.DeviceDailyContribution
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelCycle
 import com.ankiduel.shared.model.DuelState
@@ -258,7 +259,8 @@ class FirebaseBackendClient(
                             lastSyncDayKey = todayKey,
                             carryOverAnkiSeconds = 0L,
                             carryOverSocialSeconds = 0L,
-                            carryOverCardsReviewed = 0
+                            carryOverCardsReviewed = 0,
+                            deviceContributions = emptyMap()
                         )
                     }
                 )
@@ -295,42 +297,79 @@ class FirebaseBackendClient(
                         else -> normalizedJoker.carryOverCardsReviewed
                     }
 
-                    val todaySocial = snapshot.socialForegroundSeconds.coerceAtLeast(0L)
-                    val candidateSocial = carrySocial + todaySocial
-                    val nextSocial = if (rolledOver) candidateSocial else maxOf(normalizedJoker.socialSeconds, candidateSocial)
+                    val deviceKey = snapshot.deviceId.ifBlank { "default" }
+                    val existingContributions = if (rolledOver) {
+                        emptyMap()
+                    } else {
+                        normalizedJoker.deviceContributions.filterValues { it.dayKey == todayKey }
+                    }
+                    val prevDevice = existingContributions[deviceKey]
+                    val todaySocialLocal = snapshot.socialForegroundSeconds.coerceAtLeast(0L)
 
-                    if (healthy) {
-                        val todayAnki = snapshot.ankiEffectiveSeconds.coerceAtLeast(0L)
-                        val todayCards = snapshot.cardsReviewed.coerceAtLeast(0)
-                        normalizedJoker.copy(
-                            status = ParticipantStatus.ACTIVE,
-                            ankiEffectiveSeconds = carryAnki + todayAnki,
-                            socialSeconds = nextSocial,
-                            cardsReviewed = carryCards + todayCards,
-                            ankiApiConnected = snapshot.ankiApiConnected,
+                    val updatedDevice = if (healthy) {
+                        DeviceDailyContribution(
+                            deviceId = deviceKey,
+                            deviceName = snapshot.deviceName,
+                            dayKey = todayKey,
+                            ankiEffectiveSeconds = snapshot.ankiEffectiveSeconds.coerceAtLeast(0L),
+                            cardsReviewed = snapshot.cardsReviewed.coerceAtLeast(0),
+                            socialSeconds = todaySocialLocal,
+                            permissionsHealthy = true,
                             appHealthOk = snapshot.appHealthOk,
                             appHealthIssue = snapshot.appHealthIssue,
-                            lastSyncEpochMs = now,
-                            lastSyncDayKey = todayKey,
-                            carryOverAnkiSeconds = carryAnki,
-                            carryOverSocialSeconds = carrySocial,
-                            carryOverCardsReviewed = carryCards
+                            lastSyncEpochMs = now
                         )
                     } else {
-                        // Gel du score Anki en cas de révocation de permission ou d'app obligatoire manquante
-                        normalizedJoker.copy(
-                            status = ParticipantStatus.TAMPER_ALERT,
-                            socialSeconds = nextSocial,
-                            ankiApiConnected = snapshot.ankiApiConnected,
-                            appHealthOk = snapshot.appHealthOk,
+                        DeviceDailyContribution(
+                            deviceId = deviceKey,
+                            deviceName = snapshot.deviceName,
+                            dayKey = todayKey,
+                            ankiEffectiveSeconds = prevDevice?.ankiEffectiveSeconds ?: 0L,
+                            cardsReviewed = prevDevice?.cardsReviewed ?: 0,
+                            socialSeconds = maxOf(prevDevice?.socialSeconds ?: 0L, todaySocialLocal),
+                            permissionsHealthy = false,
+                            appHealthOk = false,
                             appHealthIssue = snapshot.appHealthIssue ?: "Permissions manquantes",
-                            lastSyncEpochMs = now,
-                            lastSyncDayKey = todayKey,
-                            carryOverAnkiSeconds = carryAnki,
-                            carryOverSocialSeconds = carrySocial,
-                            carryOverCardsReviewed = carryCards
+                            lastSyncEpochMs = now
                         )
                     }
+
+                    val nextContributions = (existingContributions + (deviceKey to updatedDevice))
+                        .entries
+                        .sortedByDescending { it.value.lastSyncEpochMs }
+                        .take(5)
+                        .associate { it.key to it.value }
+
+                    val todayAnkiCombined = nextContributions.values.sumOf { it.ankiEffectiveSeconds }
+                    val todaySocialCombined = nextContributions.values.sumOf { it.socialSeconds }
+                    val todayCardsCombined = nextContributions.values.maxOfOrNull { it.cardsReviewed } ?: 0
+                    val anyTamper = nextContributions.values.any { !it.permissionsHealthy }
+                    val allHealthOk = nextContributions.values.all { it.appHealthOk }
+                    val combinedHealthIssue = nextContributions.values
+                        .firstOrNull { !it.appHealthOk }
+                        ?.let { dev ->
+                            if (nextContributions.size > 1 && dev.deviceName.isNotBlank()) {
+                                "${dev.deviceName}: ${dev.appHealthIssue ?: "Config à vérifier"}"
+                            } else {
+                                dev.appHealthIssue ?: "Permissions manquantes"
+                            }
+                        }
+
+                    normalizedJoker.copy(
+                        status = if (anyTamper) ParticipantStatus.TAMPER_ALERT else ParticipantStatus.ACTIVE,
+                        ankiEffectiveSeconds = carryAnki + todayAnkiCombined,
+                        socialSeconds = carrySocial + todaySocialCombined,
+                        cardsReviewed = carryCards + todayCardsCombined,
+                        ankiApiConnected = snapshot.ankiApiConnected || normalizedJoker.ankiApiConnected,
+                        appHealthOk = allHealthOk,
+                        appHealthIssue = combinedHealthIssue,
+                        lastSyncEpochMs = now,
+                        lastSyncDayKey = todayKey,
+                        carryOverAnkiSeconds = carryAnki,
+                        carryOverSocialSeconds = carrySocial,
+                        carryOverCardsReviewed = carryCards,
+                        deviceContributions = nextContributions
+                    )
                 }
             }
 
@@ -527,6 +566,70 @@ class FirebaseBackendClient(
 
     private fun userStatsDaysCol(userId: String) =
         firestore.collection("userStats").document(userId).collection("days")
+
+    private fun userStatsDevicesCol(userId: String) =
+        firestore.collection("userStats").document(userId).collection("devices")
+
+    suspend fun upsertDeviceAndCombinedDailyStat(
+        userId: String,
+        snapshot: UsageSnapshot,
+        todayKey: String
+    ): List<DeviceDailyContribution> {
+        val deviceId = snapshot.deviceId.ifBlank { "default" }
+        val now = snapshot.capturedAtEpochMs.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val deviceData = mapOf(
+            "userId" to userId,
+            "deviceId" to deviceId,
+            "deviceName" to snapshot.deviceName.take(128),
+            "dayKey" to todayKey,
+            "ankiEffectiveSeconds" to snapshot.ankiEffectiveSeconds.coerceIn(0L, 86400L),
+            "cardsReviewed" to snapshot.cardsReviewed.coerceIn(0, 100000),
+            "socialSeconds" to snapshot.socialForegroundSeconds.coerceIn(0L, 86400L),
+            "appHealthOk" to snapshot.appHealthOk,
+            "lastSyncEpochMs" to now.coerceAtLeast(0L)
+        )
+        userStatsDevicesCol(userId).document(deviceId).set(deviceData).await()
+
+        val devices = fetchTodayDevices(userId, todayKey)
+        val combinedAnki = devices.sumOf { it.ankiEffectiveSeconds }.coerceIn(0L, 86400L)
+        val combinedSocial = devices.sumOf { it.socialSeconds }.coerceIn(0L, 86400L)
+        val combinedCards = (devices.maxOfOrNull { it.cardsReviewed } ?: 0).coerceIn(0, 100000)
+
+        upsertDailyStat(
+            userId = userId,
+            record = DailyStatRecord(
+                dayKey = todayKey,
+                userId = userId,
+                ankiEffectiveSeconds = combinedAnki,
+                cardsReviewed = combinedCards,
+                socialSeconds = combinedSocial,
+                netScoreSeconds = (combinedAnki - combinedSocial).coerceIn(-864000L, 864000L),
+                updatedAtEpochMs = now
+            )
+        )
+        return devices
+    }
+
+    suspend fun fetchTodayDevices(userId: String, todayKey: String): List<DeviceDailyContribution> {
+        val snap = userStatsDevicesCol(userId)
+            .whereEqualTo("dayKey", todayKey)
+            .get()
+            .await()
+
+        return snap.documents.mapNotNull { doc ->
+            val deviceId = doc.getString("deviceId") ?: return@mapNotNull null
+            DeviceDailyContribution(
+                deviceId = deviceId,
+                deviceName = doc.getString("deviceName").orEmpty(),
+                dayKey = doc.getString("dayKey") ?: todayKey,
+                ankiEffectiveSeconds = doc.getLong("ankiEffectiveSeconds") ?: 0L,
+                cardsReviewed = (doc.getLong("cardsReviewed") ?: 0L).toInt(),
+                socialSeconds = doc.getLong("socialSeconds") ?: 0L,
+                appHealthOk = doc.getBoolean("appHealthOk") ?: true,
+                lastSyncEpochMs = doc.getLong("lastSyncEpochMs") ?: 0L
+            )
+        }.sortedByDescending { it.lastSyncEpochMs }
+    }
 
     suspend fun upsertDailyStat(userId: String, record: DailyStatRecord) {
         val data = mapOf(

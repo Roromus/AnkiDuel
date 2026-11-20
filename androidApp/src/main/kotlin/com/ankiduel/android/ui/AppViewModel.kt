@@ -11,6 +11,7 @@ import com.ankiduel.android.tracking.PermissionHealth
 import com.ankiduel.android.update.AppUpdateManager
 import com.ankiduel.android.update.UpdateState
 import com.ankiduel.shared.model.DailyStatRecord
+import com.ankiduel.shared.model.DeviceDailyContribution
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.GlobalLockStatus
@@ -33,6 +34,7 @@ class AppViewModel(
     val usageSnapshot: StateFlow<UsageSnapshot> = repository.usageSnapshot
     val permissionHealth: StateFlow<PermissionHealth> = repository.permissionHealth
     val lockStatus: StateFlow<GlobalLockStatus> = repository.lockStatus
+    val todayDevices: StateFlow<List<DeviceDailyContribution>> = repository.todayDevices
     val isIdleFlagged: StateFlow<Boolean> = repository.isIdleFlagged
     val trackingDiagnostics: StateFlow<TrackingDiagnostics> = repository.trackingDiagnostics
     val updateState: StateFlow<UpdateState> = updateManager.state

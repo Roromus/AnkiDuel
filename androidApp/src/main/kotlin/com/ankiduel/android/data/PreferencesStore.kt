@@ -1,6 +1,7 @@
 package com.ankiduel.android.data
 
 import android.content.Context
+import android.os.Build
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -48,9 +49,13 @@ class PreferencesStore(private val context: Context) {
         val IDLE_LAST_CARDS = intPreferencesKey("idle_last_cards")
         val IDLE_SINCE_REVIEW = longPreferencesKey("idle_since_review")
         val IDLE_EFFECTIVE_ACC = longPreferencesKey("idle_effective_acc")
+        val IDLE_BANKED_CARDS = intPreferencesKey("idle_banked_cards")
+        val IDLE_ACTIVITY_FINGERPRINT = stringPreferencesKey("idle_activity_fingerprint")
+        val TRACKER_ENGINE_VERSION = intPreferencesKey("tracker_engine_version")
 
         val CACHED_LOCK_STATUS_JSON = stringPreferencesKey("cached_lock_status_json")
         val CACHED_LOCK_TRACKED_PACKAGES = stringSetPreferencesKey("cached_lock_tracked_packages")
+        val DEVICE_ID = stringPreferencesKey("device_id")
     }
 
     val sessionFlow: Flow<StoredSession> = context.dataStore.data.map { prefs ->
@@ -64,6 +69,28 @@ class PreferencesStore(private val context: Context) {
     }.distinctUntilChanged()
 
     suspend fun getSession(): StoredSession = sessionFlow.first()
+
+    suspend fun getOrCreateDeviceId(): String {
+        val existing = context.dataStore.data.first()[Keys.DEVICE_ID]
+        if (!existing.isNullOrBlank()) return existing
+        val generated = java.util.UUID.randomUUID().toString()
+        context.dataStore.edit { prefs ->
+            prefs[Keys.DEVICE_ID] = generated
+        }
+        return generated
+    }
+
+    fun getDeviceName(): String {
+        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+        val model = Build.MODEL.orEmpty().trim()
+        val raw = when {
+            model.startsWith(manufacturer, ignoreCase = true) -> model
+            manufacturer.isNotBlank() && model.isNotBlank() -> "$manufacturer $model"
+            model.isNotBlank() -> model
+            else -> "Android"
+        }
+        return raw.replaceFirstChar { it.uppercase() }.take(40)
+    }
 
     suspend fun saveAuth(userId: String, username: String, email: String) {
         context.dataStore.edit { prefs ->
@@ -101,20 +128,33 @@ class PreferencesStore(private val context: Context) {
     suspend fun loadAntiIdleState(todayKey: String = LocalDate.now().toString()): AntiIdleValidator.State {
         val prefs = context.dataStore.data.first()
         val storedDay = prefs[Keys.IDLE_DAY_KEY]
-        if (storedDay != null && storedDay != todayKey) {
+        val storedVersion = prefs[Keys.TRACKER_ENGINE_VERSION] ?: 1
+        if ((storedDay != null && storedDay != todayKey) || storedVersion < CURRENT_TRACKER_ENGINE_VERSION) {
             return AntiIdleValidator.State()
         }
         return AntiIdleValidator.State(
             lastRawAnkiSeconds = prefs[Keys.IDLE_LAST_RAW_ANKI] ?: 0L,
             lastCardsReviewed = prefs[Keys.IDLE_LAST_CARDS] ?: 0,
             secondsSinceLastReview = prefs[Keys.IDLE_SINCE_REVIEW] ?: 0L,
-            accumulatedEffectiveSeconds = prefs[Keys.IDLE_EFFECTIVE_ACC] ?: 0L
+            accumulatedEffectiveSeconds = prefs[Keys.IDLE_EFFECTIVE_ACC] ?: 0L,
+            bankedCards = prefs[Keys.IDLE_BANKED_CARDS] ?: 0
         )
+    }
+
+    suspend fun loadAntiIdleActivityFingerprint(todayKey: String = LocalDate.now().toString()): String {
+        val prefs = context.dataStore.data.first()
+        val storedDay = prefs[Keys.IDLE_DAY_KEY]
+        val storedVersion = prefs[Keys.TRACKER_ENGINE_VERSION] ?: 1
+        if ((storedDay != null && storedDay != todayKey) || storedVersion < CURRENT_TRACKER_ENGINE_VERSION) {
+            return ""
+        }
+        return prefs[Keys.IDLE_ACTIVITY_FINGERPRINT].orEmpty()
     }
 
     suspend fun saveAntiIdleState(
         state: AntiIdleValidator.State,
-        todayKey: String = LocalDate.now().toString()
+        todayKey: String = LocalDate.now().toString(),
+        activityFingerprint: String? = null
     ) {
         context.dataStore.edit { prefs ->
             prefs[Keys.IDLE_DAY_KEY] = todayKey
@@ -122,6 +162,11 @@ class PreferencesStore(private val context: Context) {
             prefs[Keys.IDLE_LAST_CARDS] = state.lastCardsReviewed
             prefs[Keys.IDLE_SINCE_REVIEW] = state.secondsSinceLastReview
             prefs[Keys.IDLE_EFFECTIVE_ACC] = state.accumulatedEffectiveSeconds
+            prefs[Keys.IDLE_BANKED_CARDS] = state.bankedCards
+            prefs[Keys.TRACKER_ENGINE_VERSION] = CURRENT_TRACKER_ENGINE_VERSION
+            if (activityFingerprint != null) {
+                prefs[Keys.IDLE_ACTIVITY_FINGERPRINT] = activityFingerprint
+            }
         }
     }
 
@@ -132,7 +177,13 @@ class PreferencesStore(private val context: Context) {
             prefs.remove(Keys.IDLE_LAST_CARDS)
             prefs.remove(Keys.IDLE_SINCE_REVIEW)
             prefs.remove(Keys.IDLE_EFFECTIVE_ACC)
+            prefs.remove(Keys.IDLE_BANKED_CARDS)
+            prefs.remove(Keys.IDLE_ACTIVITY_FINGERPRINT)
         }
+    }
+
+    companion object {
+        private const val CURRENT_TRACKER_ENGINE_VERSION = 2
     }
 
     suspend fun saveCachedLockState(status: GlobalLockStatus, trackedPackages: Set<String>) {

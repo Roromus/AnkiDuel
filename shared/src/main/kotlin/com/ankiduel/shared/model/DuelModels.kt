@@ -63,7 +63,23 @@ data class UsageSnapshot(
     val ankiApiConnected: Boolean = false,
     val appHealthOk: Boolean = true,
     val appHealthIssue: String? = null,
+    val deviceId: String = "",
+    val deviceName: String = "",
     val capturedAtEpochMs: Long
+)
+
+@Serializable
+data class DeviceDailyContribution(
+    val deviceId: String,
+    val deviceName: String = "",
+    val dayKey: String,
+    val ankiEffectiveSeconds: Long = 0L,
+    val cardsReviewed: Int = 0,
+    val socialSeconds: Long = 0L,
+    val permissionsHealthy: Boolean = true,
+    val appHealthOk: Boolean = true,
+    val appHealthIssue: String? = null,
+    val lastSyncEpochMs: Long = 0L
 )
 
 @Serializable
@@ -87,7 +103,8 @@ data class ParticipantState(
     val carryOverCardsReviewed: Int = 0,
     val ankiApiConnected: Boolean = false,
     val appHealthOk: Boolean = true,
-    val appHealthIssue: String? = null
+    val appHealthIssue: String? = null,
+    val deviceContributions: Map<String, DeviceDailyContribution> = emptyMap()
 ) {
     val ankiMinutes: Int get() = (ankiEffectiveSeconds / 60L).toInt()
     val socialMinutes: Int get() = (socialSeconds / 60L).toInt()

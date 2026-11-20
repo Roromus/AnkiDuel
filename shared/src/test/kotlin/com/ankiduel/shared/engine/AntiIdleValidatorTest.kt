@@ -84,4 +84,66 @@ class AntiIdleValidatorTest {
         assertEquals(210L, r3.effectiveSeconds)
         assertEquals(420L, r3.idleCappedSeconds)
     }
+
+    @Test
+    fun `credits full 16 min session when extraReviewActivity signals learning or cloze reviews while rated_1 stays flat`() {
+        val validator = AntiIdleValidator(graceSecondsPerWindow = 180L)
+        // First 3 min: 15 notes rated for the first time today
+        var state = validator.evaluate(
+            AntiIdleValidator.State(),
+            rawAnkiSeconds = 180L,
+            cardsReviewed = 15,
+            ankiApiConnected = true
+        ).nextState
+
+        // Next 13 min (13 polls of 60s): re-reviewing learning cards / cloze siblings -> rated:1 stays 15,
+        // but deck_count / rating buckets change -> extraReviewActivity = true
+        var lastResult = validator.evaluate(state, rawAnkiSeconds = 180L, cardsReviewed = 15, ankiApiConnected = true)
+        for (min in 4..16) {
+            lastResult = validator.evaluate(
+                previous = state,
+                rawAnkiSeconds = min * 60L,
+                cardsReviewed = 15,
+                ankiApiConnected = true,
+                extraReviewActivity = true
+            )
+            state = lastResult.nextState
+        }
+
+        assertEquals(960L, lastResult.effectiveSeconds)
+        assertEquals(0L, lastResult.idleCappedSeconds)
+        assertFalse(lastResult.isIdleFlagged)
+    }
+
+    @Test
+    fun `credits delayed UsageStats flush using banked cards reviewed while rawDelta was zero`() {
+        val validator = AntiIdleValidator(graceSecondsPerWindow = 180L)
+        // Initial 6 min session already flushed
+        val r1 = validator.evaluate(AntiIdleValidator.State(), rawAnkiSeconds = 360L, cardsReviewed = 20, ankiApiConnected = true)
+        assertEquals(360L, r1.effectiveSeconds)
+
+        // User studies 10 more minutes and reviews 15 cards while UsageStats has not flushed yet (raw still 360s)
+        val r2 = validator.evaluate(r1.nextState, rawAnkiSeconds = 360L, cardsReviewed = 35, ankiApiConnected = true)
+        assertEquals(360L, r2.effectiveSeconds)
+        assertFalse(r2.isIdleFlagged)
+
+        // User exits AnkiDroid -> UsageStats flushes +600s (total 960s = 16 min) with cardsDelta = 0
+        val r3 = validator.evaluate(r2.nextState, rawAnkiSeconds = 960L, cardsReviewed = 35, ankiApiConnected = true)
+        assertEquals(960L, r3.effectiveSeconds)
+        assertEquals(0L, r3.idleCappedSeconds)
+        assertFalse(r3.isIdleFlagged)
+    }
+
+    @Test
+    fun `preserves validated time when rawAnkiSeconds transiently drops within the same day`() {
+        val validator = AntiIdleValidator(graceSecondsPerWindow = 180L)
+        val r1 = validator.evaluate(AntiIdleValidator.State(), rawAnkiSeconds = 960L, cardsReviewed = 40, ankiApiConnected = true)
+        assertEquals(960L, r1.effectiveSeconds)
+
+        // UsageEvents buffer evicts earlier morning session -> raw drops to 360s
+        val r2 = validator.evaluate(r1.nextState, rawAnkiSeconds = 360L, cardsReviewed = 40, ankiApiConnected = true)
+        assertEquals(960L, r2.effectiveSeconds)
+        assertEquals(960L, r2.nextState.lastRawAnkiSeconds)
+        assertFalse(r2.isIdleFlagged)
+    }
 }

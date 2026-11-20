@@ -10,6 +10,7 @@ import com.ankiduel.android.tracking.UsageStatsTracker
 import com.ankiduel.shared.engine.AntiIdleValidator
 import com.ankiduel.shared.engine.DuelDeltaCalculator
 import com.ankiduel.shared.model.DailyStatRecord
+import com.ankiduel.shared.model.DeviceDailyContribution
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.DuelStatus
@@ -30,7 +31,10 @@ import java.time.ZoneId
 
 data class TrackingDiagnostics(
     val rawAnkiSeconds: Long = 0L,
+    val eventsAnkiSeconds: Long = 0L,
+    val dailyStatsAnkiSeconds: Long = 0L,
     val effectiveAnkiSeconds: Long = 0L,
+    val idleCappedSeconds: Long = 0L,
     val ankiEventCount: Int = 0,
     val usedDailyStatsFallback: Boolean = false,
     val ankiApiSnapshot: AnkiActivitySnapshot = AnkiActivitySnapshot(
@@ -82,6 +86,9 @@ class AnkiDuelRepository(
         GlobalLockStatus(false, 0L, 0, null, null, null, 0L)
     )
     val lockStatus: StateFlow<GlobalLockStatus> = _lockStatus.asStateFlow()
+
+    private val _todayDevices = MutableStateFlow<List<DeviceDailyContribution>>(emptyList())
+    val todayDevices: StateFlow<List<DeviceDailyContribution>> = _todayDevices.asStateFlow()
 
     private var realtimeJob: Job? = null
     private var listeningUserId: String? = null
@@ -267,13 +274,24 @@ class AnkiDuelRepository(
             if (current.demoMode) demoBot.simulatedSocialBonusSeconds else 0L
 
         val prevIdle = prefs.loadAntiIdleState(todayKey)
+        val prevFingerprint = prefs.loadAntiIdleActivityFingerprint(todayKey)
+        val currentFingerprint = ankiApi.activityFingerprint
+        val extraReviewActivity = ankiApi.apiConnected &&
+            prevFingerprint.isNotEmpty() &&
+            currentFingerprint != prevFingerprint
+
         val idleResult = antiIdleValidator.evaluate(
             previous = prevIdle,
             rawAnkiSeconds = rawAnki,
             cardsReviewed = ankiApi.cardsReviewedToday,
-            ankiApiConnected = ankiApi.apiConnected && !current.demoMode
+            ankiApiConnected = ankiApi.apiConnected && !current.demoMode,
+            extraReviewActivity = extraReviewActivity
         )
-        prefs.saveAntiIdleState(idleResult.nextState, todayKey)
+        prefs.saveAntiIdleState(
+            state = idleResult.nextState,
+            todayKey = todayKey,
+            activityFingerprint = if (ankiApi.apiConnected) currentFingerprint else null
+        )
         _isIdleFlagged.value = idleResult.isIdleFlagged
 
         val (remoteHealthOk, remoteHealthIssue) = if (current.demoMode) {
@@ -282,8 +300,11 @@ class AnkiDuelRepository(
             health.evaluateRemoteHealth()
         }
 
+        val deviceId = if (current.demoMode) "demo-device" else prefs.getOrCreateDeviceId()
+        val deviceName = prefs.getDeviceName()
+        val monotonicRawAnki = idleResult.nextState.lastRawAnkiSeconds
         val snapshot = UsageSnapshot(
-            ankiForegroundSeconds = rawAnki,
+            ankiForegroundSeconds = monotonicRawAnki,
             ankiEffectiveSeconds = idleResult.effectiveSeconds,
             cardsReviewed = ankiApi.cardsReviewedToday,
             socialForegroundSeconds = rawSocial,
@@ -293,12 +314,17 @@ class AnkiDuelRepository(
             ankiApiConnected = ankiApi.apiConnected,
             appHealthOk = remoteHealthOk,
             appHealthIssue = remoteHealthIssue,
+            deviceId = deviceId,
+            deviceName = deviceName,
             capturedAtEpochMs = nowMs
         )
         _usageSnapshot.value = snapshot
         _trackingDiagnostics.value = TrackingDiagnostics(
-            rawAnkiSeconds = rawAnki,
+            rawAnkiSeconds = monotonicRawAnki,
+            eventsAnkiSeconds = rawMeasurement.eventsAnkiSeconds,
+            dailyStatsAnkiSeconds = rawMeasurement.dailyStatsAnkiSeconds,
             effectiveAnkiSeconds = idleResult.effectiveSeconds,
+            idleCappedSeconds = idleResult.idleCappedSeconds,
             ankiEventCount = rawMeasurement.ankiEventCount,
             usedDailyStatsFallback = rawMeasurement.usedDailyStatsFallback,
             ankiApiSnapshot = ankiApi,
@@ -306,20 +332,26 @@ class AnkiDuelRepository(
         )
 
         val updatedDuels = if (current.demoMode) {
+            _todayDevices.value = listOf(
+                DeviceDailyContribution(
+                    deviceId = deviceId,
+                    deviceName = deviceName,
+                    dayKey = todayKey,
+                    ankiEffectiveSeconds = snapshot.ankiEffectiveSeconds,
+                    cardsReviewed = snapshot.cardsReviewed,
+                    socialSeconds = snapshot.socialForegroundSeconds,
+                    permissionsHealthy = true,
+                    appHealthOk = true,
+                    lastSyncEpochMs = nowMs
+                )
+            )
             demoBot.syncSnapshot(snapshot)
         } else if (!current.userId.isNullOrBlank()) {
             runCatching {
-                firebase.upsertDailyStat(
+                _todayDevices.value = firebase.upsertDeviceAndCombinedDailyStat(
                     userId = current.userId,
-                    record = DailyStatRecord(
-                        dayKey = todayKey,
-                        userId = current.userId,
-                        ankiEffectiveSeconds = idleResult.effectiveSeconds,
-                        cardsReviewed = ankiApi.cardsReviewedToday,
-                        socialSeconds = rawSocial,
-                        netScoreSeconds = idleResult.effectiveSeconds - rawSocial,
-                        updatedAtEpochMs = nowMs
-                    )
+                    snapshot = snapshot,
+                    todayKey = todayKey
                 )
             }
             runCatching {

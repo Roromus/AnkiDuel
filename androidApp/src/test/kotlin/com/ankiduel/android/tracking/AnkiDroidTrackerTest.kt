@@ -30,7 +30,16 @@ class AnkiDroidTrackerTest {
         installFakeAnkiPackage(app, "com.ichi2.anki")
         grantAnkiPermission(app, AnkiDroidTracker.ANKI_READ_WRITE_PERMISSION)
 
-        FakeAnkiNotesProvider.reset(rowCount = 14)
+        FakeAnkiNotesProvider.reset(
+            rowCountBySelection = mapOf(
+                "rated:1" to 14,
+                "rated:1:1" to 5,
+                "rated:1:2" to 2,
+                "rated:1:3" to 12,
+                "rated:1:4" to 1
+            ),
+            deckCounts = mapOf(1L to "[2,10,5]")
+        )
         Robolectric.buildContentProvider(FakeAnkiNotesProvider::class.java)
             .create("com.ichi2.anki.flashcards")
 
@@ -39,8 +48,44 @@ class AnkiDroidTrackerTest {
         assertTrue(snapshot.apiConnected)
         assertEquals(AnkiApiStatus.CONNECTED, snapshot.status)
         assertEquals(14, snapshot.cardsReviewedToday)
-        assertEquals("rated:1", FakeAnkiNotesProvider.lastSelection)
+        assertEquals(20, snapshot.ratingBucketsTotal)
+        assertEquals("1:[2,10,5]", snapshot.deckCountsSignature)
+        assertEquals("rated:1", FakeAnkiNotesProvider.queriedSelections.firstOrNull())
         assertNull(FakeAnkiNotesProvider.lastSelectionArgs)
+    }
+
+    @Test
+    fun `detects activity fingerprint change when sibling cloze or learning card changes deck counts or ease`() {
+        val app = RuntimeEnvironment.getApplication()
+        installFakeAnkiPackage(app, "com.ichi2.anki")
+        grantAnkiPermission(app, AnkiDroidTracker.ANKI_READ_WRITE_PERMISSION)
+
+        FakeAnkiNotesProvider.reset(
+            rowCountBySelection = mapOf(
+                "rated:1" to 15,
+                "rated:1:1" to 10,
+                "rated:1:3" to 5
+            ),
+            deckCounts = mapOf(1L to "[10,0,5]")
+        )
+        Robolectric.buildContentProvider(FakeAnkiNotesProvider::class.java)
+            .create("com.ichi2.anki.flashcards")
+
+        val first = AnkiDroidTracker(app).queryTodayCardsReviewed()
+
+        // Same 15 unique notes rated today, but user graduated a learning card (Again -> Good)
+        FakeAnkiNotesProvider.rowCountBySelection = mapOf(
+            "rated:1" to 15,
+            "rated:1:1" to 10,
+            "rated:1:3" to 6
+        )
+        FakeAnkiNotesProvider.deckCounts = mapOf(1L to "[9,0,5]")
+
+        val second = AnkiDroidTracker(app).queryTodayCardsReviewed()
+
+        assertEquals(15, first.cardsReviewedToday)
+        assertEquals(15, second.cardsReviewedToday)
+        assertTrue(first.activityFingerprint != second.activityFingerprint)
     }
 
     @Test
@@ -90,13 +135,25 @@ class AnkiDroidTrackerTest {
             selectionArgs: Array<out String>?,
             sortOrder: String?
         ): Cursor? {
-            if (uri.path != "/notes") return null
-            lastSelection = selection
-            lastSelectionArgs = selectionArgs?.toList()
-            return MatrixCursor(arrayOf("_id")).apply {
-                for (i in 1..configuredRowCount) {
-                    addRow(arrayOf(i.toLong()))
+            return when (uri.path) {
+                "/notes" -> {
+                    queriedSelections.add(selection)
+                    lastSelectionArgs = selectionArgs?.toList()
+                    val count = rowCountBySelection[selection] ?: 0
+                    MatrixCursor(arrayOf("_id")).apply {
+                        for (i in 1..count) {
+                            addRow(arrayOf(i.toLong()))
+                        }
+                    }
                 }
+                "/decks" -> {
+                    MatrixCursor(arrayOf("deck_id", "deck_count")).apply {
+                        for ((id, counts) in deckCounts) {
+                            addRow(arrayOf(id, counts))
+                        }
+                    }
+                }
+                else -> null
             }
         }
 
@@ -106,13 +163,18 @@ class AnkiDroidTrackerTest {
         override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 
         companion object {
-            var configuredRowCount: Int = 0
-            var lastSelection: String? = null
+            var rowCountBySelection: Map<String, Int> = emptyMap()
+            var deckCounts: Map<Long, String> = emptyMap()
+            val queriedSelections: MutableList<String?> = mutableListOf()
             var lastSelectionArgs: List<String>? = null
 
-            fun reset(rowCount: Int) {
-                configuredRowCount = rowCount
-                lastSelection = null
+            fun reset(
+                rowCountBySelection: Map<String, Int> = emptyMap(),
+                deckCounts: Map<Long, String> = emptyMap()
+            ) {
+                this.rowCountBySelection = rowCountBySelection
+                this.deckCounts = deckCounts
+                queriedSelections.clear()
                 lastSelectionArgs = null
             }
         }

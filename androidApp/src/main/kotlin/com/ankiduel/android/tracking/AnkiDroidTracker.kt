@@ -20,8 +20,19 @@ data class AnkiActivitySnapshot(
     val cardsReviewedToday: Int,
     val status: AnkiApiStatus = if (apiConnected) AnkiApiStatus.CONNECTED else AnkiApiStatus.PROVIDER_UNAVAILABLE,
     val detectedPackage: String? = null,
-    val diagnosticDetail: String? = null
-)
+    val diagnosticDetail: String? = null,
+    val ratingBucketsTotal: Int = 0,
+    val deckCountsSignature: String = ""
+) {
+    /**
+     * Empreinte d'activité de révision combinant :
+     * - les notes uniques révisées aujourd'hui (`rated:1`)
+     * - les notations par bouton (`rated:1:1`..`rated:1:4`, détecte les passages À revoir -> Bien)
+     * - les compteurs par paquet (`deck_count`, détecte les cartes cloze sœurs et graduations d'apprentissage)
+     */
+    val activityFingerprint: String
+        get() = "$cardsReviewedToday|$ratingBucketsTotal|$deckCountsSignature"
+}
 
 /**
  * Interroge le ContentProvider officiel d'AnkiDroid (FlashCardsContract) lorsqu'il est autorisé
@@ -68,27 +79,43 @@ class AnkiDroidTracker(private val context: Context) {
         // FlashCardsContract.Note.CONTENT_URI attend une requête de recherche Anki dans `selection`
         // (et `selectionArgs = null`). `rated:1` retourne les notes révisées aujourd'hui.
         val notesUri = Uri.parse("content://$authority/notes")
+        val decksUri = Uri.parse("content://$authority/decks")
 
         return try {
-            context.contentResolver.query(
+            val ratedNotes = context.contentResolver.query(
                 notesUri,
                 arrayOf("_id"),
                 "rated:1",
                 null,
                 null
             )?.use { cursor ->
-                AnkiActivitySnapshot(
-                    apiConnected = true,
-                    cardsReviewedToday = cursor.count.coerceAtLeast(0),
-                    status = AnkiApiStatus.CONNECTED,
-                    detectedPackage = ankiPkg
-                )
-            } ?: AnkiActivitySnapshot(
+                cursor.count.coerceAtLeast(0)
+            } ?: return AnkiActivitySnapshot(
                 apiConnected = false,
                 cardsReviewedToday = 0,
                 status = AnkiApiStatus.PROVIDER_UNAVAILABLE,
                 detectedPackage = ankiPkg,
                 diagnosticDetail = "Le fournisseur AnkiDroid n'a pas répondu (vérifiez Paramètres > Avancé > API AnkiDroid dans AnkiDroid)."
+            )
+
+            // Signaux d'activité complémentaires pour ne pas bloquer le compteur lors des révisions
+            // de cartes sœurs (cloze/inversées) ou de cartes en apprentissage (À revoir -> Bien) :
+            // 1) Somme des notations par bouton aujourd'hui (`rated:1:1`..`rated:1:4`)
+            // 2) Signature des compteurs [learn, review, new] par paquet (`decks/deck_count`)
+            val ratingBucketsTotal = if (ratedNotes > 0) {
+                queryRatingBucketsTotal(notesUri)
+            } else {
+                0
+            }
+            val deckSignature = queryDeckCountsSignature(decksUri)
+
+            AnkiActivitySnapshot(
+                apiConnected = true,
+                cardsReviewedToday = ratedNotes,
+                status = AnkiApiStatus.CONNECTED,
+                detectedPackage = ankiPkg,
+                ratingBucketsTotal = ratingBucketsTotal,
+                deckCountsSignature = deckSignature
             )
         } catch (sec: SecurityException) {
             AnkiActivitySnapshot(
@@ -107,6 +134,48 @@ class AnkiDroidTracker(private val context: Context) {
                 diagnosticDetail = err.message ?: err.javaClass.simpleName
             )
         }
+    }
+
+    private fun queryRatingBucketsTotal(notesUri: Uri): Int {
+        var total = 0
+        for (ease in 1..4) {
+            val count = runCatching {
+                context.contentResolver.query(
+                    notesUri,
+                    arrayOf("_id"),
+                    "rated:1:$ease",
+                    null,
+                    null
+                )?.use { it.count.coerceAtLeast(0) } ?: 0
+            }.getOrDefault(0)
+            total += count
+        }
+        return total
+    }
+
+    private fun queryDeckCountsSignature(decksUri: Uri): String {
+        return runCatching {
+            context.contentResolver.query(
+                decksUri,
+                arrayOf("deck_id", "deck_count"),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex("deck_id")
+                val countIdx = cursor.getColumnIndex("deck_count")
+                if (idIdx < 0 || countIdx < 0) return@use ""
+                val entries = mutableListOf<Pair<Long, String>>()
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIdx)
+                    val counts = cursor.getString(countIdx).orEmpty().trim()
+                    entries.add(id to counts)
+                }
+                entries
+                    .sortedBy { it.first }
+                    .joinToString("|") { (id, counts) -> "$id:$counts" }
+            }.orEmpty()
+        }.getOrDefault("")
     }
 
     private fun isPackageInstalled(packageName: String): Boolean {

@@ -17,8 +17,8 @@ android {
         applicationId = "com.ankiduel.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.2.2"
+        versionCode = 10
+        versionName = "1.2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -65,25 +65,7 @@ android {
     }
 }
 
-val robolectricSdks by configurations.creating {
-    isTransitive = false
-}
-
-val robolectricSdksDir = layout.buildDirectory.dir("robolectric-sdks")
-
-val prepareRobolectricSdks by tasks.registering(Copy::class) {
-    from(robolectricSdks)
-    into(robolectricSdksDir)
-}
-
-tasks.withType<Test>().configureEach {
-    dependsOn(prepareRobolectricSdks)
-    systemProperty("robolectric.offline", "true")
-    systemProperty("robolectric.dependency.dir", robolectricSdksDir.get().asFile.absolutePath)
-}
-
 dependencies {
-    robolectricSdks("org.robolectric:android-all-instrumented:14-robolectric-10818077-i6")
     implementation(project(":shared"))
 
     implementation(libs.androidx.core.ktx)
@@ -113,5 +95,4 @@ dependencies {
     testImplementation(libs.junit4)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.robolectric)
 }

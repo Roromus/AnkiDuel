@@ -311,9 +311,18 @@ class FirebaseBackendClient(
                             deviceId = deviceKey,
                             deviceName = snapshot.deviceName,
                             dayKey = todayKey,
-                            ankiEffectiveSeconds = snapshot.ankiEffectiveSeconds.coerceAtLeast(0L),
-                            cardsReviewed = snapshot.cardsReviewed.coerceAtLeast(0),
-                            socialSeconds = todaySocialLocal,
+                            ankiEffectiveSeconds = maxOf(
+                                prevDevice?.ankiEffectiveSeconds ?: 0L,
+                                snapshot.ankiEffectiveSeconds.coerceAtLeast(0L)
+                            ),
+                            cardsReviewed = maxOf(
+                                prevDevice?.cardsReviewed ?: 0,
+                                snapshot.cardsReviewed.coerceAtLeast(0)
+                            ),
+                            socialSeconds = maxOf(
+                                prevDevice?.socialSeconds ?: 0L,
+                                todaySocialLocal
+                            ),
                             permissionsHealthy = true,
                             appHealthOk = snapshot.appHealthOk,
                             appHealthIssue = snapshot.appHealthIssue,

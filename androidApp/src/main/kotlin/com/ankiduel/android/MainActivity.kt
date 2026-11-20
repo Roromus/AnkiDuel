@@ -314,6 +314,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                             duels = duels,
                             health = health,
                             isIdleFlagged = isIdleFlagged,
+                            todayDevices = todayDevices,
                             onRefresh = { viewModel.refreshAll() },
                             onOpenPermissions = { showPermissions = true },
                             onDuelClick = { selectedDuelId = it },

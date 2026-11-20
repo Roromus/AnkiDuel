@@ -79,6 +79,8 @@ import com.ankiduel.android.ui.theme.TabularFeatures
 import com.ankiduel.android.ui.theme.TextMuted
 import com.ankiduel.android.ui.theme.TextPrimary
 import com.ankiduel.android.ui.theme.TextSecondary
+import com.ankiduel.shared.model.DailyStatRecord
+import com.ankiduel.shared.model.DeviceDailyContribution
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.DuelStatus
 import com.ankiduel.shared.model.GlobalLockStatus
@@ -99,6 +101,7 @@ fun DashboardScreen(
     duels: List<DuelState>,
     health: PermissionHealth,
     isIdleFlagged: Boolean,
+    todayDevices: List<DeviceDailyContribution> = emptyList(),
     onRefresh: () -> Unit,
     onOpenPermissions: () -> Unit,
     onDuelClick: (String) -> Unit,
@@ -123,8 +126,20 @@ fun DashboardScreen(
         }
     }
 
-    val ankiMin = (usage.ankiEffectiveSeconds / 60L).toInt()
-    val socialMin = (usage.socialForegroundSeconds / 60L).toInt()
+    val accountAnkiSeconds = remember(todayDevices, usage) {
+        if (todayDevices.isNotEmpty()) todayDevices.sumOf { it.ankiEffectiveSeconds }
+        else usage.ankiEffectiveSeconds
+    }
+    val accountSocialSeconds = remember(todayDevices, usage) {
+        if (todayDevices.isNotEmpty()) todayDevices.sumOf { it.socialSeconds }
+        else usage.socialForegroundSeconds
+    }
+    val accountCards = remember(todayDevices, usage) {
+        if (todayDevices.isNotEmpty()) maxOf(usage.cardsReviewed, todayDevices.maxOfOrNull { it.cardsReviewed } ?: 0)
+        else usage.cardsReviewed
+    }
+    val ankiMin = (accountAnkiSeconds / 60L).toInt()
+    val socialMin = (accountSocialSeconds / 60L).toInt()
     val netMin = ankiMin - socialMin
 
     val jokerActive = lockStatus.jokerActiveUntilEpochMs > nowMs
@@ -454,11 +469,20 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Équilibre du jour",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "Équilibre du jour",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary
+                            )
+                            if (todayDevices.size > 1) {
+                                Text(
+                                    text = "Total compte · ${todayDevices.size} appareils",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AnkiBlueSoft
+                                )
+                            }
+                        }
                         StatusPill(
                             text = formatCompactMinutes(netMin, showSign = true),
                             color = if (netMin >= 0) SafeEmeraldSoft else SocialCoralSoft
@@ -497,7 +521,7 @@ fun DashboardScreen(
                             )
                             Text(
                                 text = when {
-                                    usage.ankiApiConnected -> "${usage.cardsReviewed} cartes révisées"
+                                    usage.ankiApiConnected || accountCards > 0 -> "$accountCards cartes révisées"
                                     health.ankiDroidInstalled && health.ankiDroidApiGranted -> "API AnkiDroid inactive"
                                     else -> "Suivi temps écran"
                                 },

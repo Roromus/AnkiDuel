@@ -378,6 +378,23 @@ fun DuelDetailScreen(
                             )
                         }
 
+                        if (p.deviceContributions.size > 1) {
+                            Spacer(Modifier.height(6.dp))
+                            val breakdown = p.deviceContributions.values
+                                .sortedByDescending { it.lastSyncEpochMs }
+                                .joinToString(" + ") { dev ->
+                                    val name = dev.deviceName.ifBlank { "Appareil" }
+                                    "$name ${(dev.ankiEffectiveSeconds / 60L)}m"
+                                }
+                            Text(
+                                text = "${p.deviceContributions.size} appareils · $breakdown",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
                         when (p.status) {
                             ParticipantStatus.TAMPER_ALERT -> {
                                 Spacer(Modifier.height(10.dp))

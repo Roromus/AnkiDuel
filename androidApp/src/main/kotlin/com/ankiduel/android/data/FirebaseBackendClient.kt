@@ -42,6 +42,10 @@ class FirebaseBackendClient(
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+    private val compactJson = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = false
+    }
     private val secureRandom = SecureRandom()
 
     private val usersCol get() = firestore.collection("users")
@@ -501,7 +505,7 @@ class FirebaseBackendClient(
 
     private fun duelToMap(duel: DuelState): Map<String, Any> {
         val participantsMap = duel.participants.associate { p ->
-            p.userId to json.encodeToString(p)
+            p.userId to compactJson.encodeToString(p)
         }
         return mapOf(
             "duelId" to duel.duelId,

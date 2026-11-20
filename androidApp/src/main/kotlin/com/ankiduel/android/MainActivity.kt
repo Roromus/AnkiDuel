@@ -157,6 +157,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
     val feedback by viewModel.feedbackMessage.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
     val todayDevices by viewModel.todayDevices.collectAsState()
+    val firestoreSyncWarning by viewModel.firestoreSyncWarning.collectAsState()
     val personalStats by viewModel.personalStats.collectAsState()
     val opponentStats by viewModel.opponentStats.collectAsState()
     val selectedOpponentId by viewModel.selectedOpponentId.collectAsState()
@@ -343,6 +344,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                             opponentStats = opponentStats,
                             selectedOpponentId = selectedOpponentId,
                             isLoading = statsLoading,
+                            firestoreSyncWarning = firestoreSyncWarning,
                             onSelectOpponent = { viewModel.selectStatsOpponent(it) },
                             onRefresh = { viewModel.loadStats() }
                         )
@@ -357,6 +359,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                             userEmail = currentSession.email,
                             demoMode = currentSession.demoMode,
                             todayDevices = todayDevices,
+                            firestoreSyncWarning = firestoreSyncWarning,
                             onTogglePackage = viewModel::toggleSocialPackage,
                             onOpenPermissions = { showPermissions = true },
                             onLogout = {

@@ -79,6 +79,7 @@ fun AppsSettingsScreen(
     userEmail: String?,
     demoMode: Boolean,
     todayDevices: List<DeviceDailyContribution> = emptyList(),
+    firestoreSyncWarning: String? = null,
     onTogglePackage: (String) -> Unit,
     onOpenPermissions: () -> Unit,
     onLogout: () -> Unit
@@ -198,6 +199,30 @@ fun AppsSettingsScreen(
                         subtitle = if (demoMode) "Revenir à l'écran de connexion" else "Fermer votre session actuelle",
                         onClick = onLogout
                     )
+                }
+            }
+
+            if (!firestoreSyncWarning.isNullOrBlank()) {
+                item(key = "firestore_warning") {
+                    ObsidianCard(
+                        shape = RoundedCornerShape(18.dp),
+                        borderTint = AmberJoker,
+                        borderAlpha = 0.35f,
+                        contentPadding = PaddingValues(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Configuration Firebase requise",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = AmberJokerSoft
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = firestoreSyncWarning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
                 }
             }
 

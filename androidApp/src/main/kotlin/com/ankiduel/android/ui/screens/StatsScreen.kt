@@ -89,6 +89,7 @@ fun StatsScreen(
     opponentStats: List<DailyStatRecord>,
     selectedOpponentId: String?,
     isLoading: Boolean,
+    firestoreSyncWarning: String? = null,
     onSelectOpponent: (String?) -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -167,6 +168,30 @@ fun StatsScreen(
                             icon = Icons.Rounded.Refresh,
                             contentDescription = "Actualiser les stats",
                             onClick = onRefresh
+                        )
+                    }
+                }
+            }
+
+            if (!firestoreSyncWarning.isNullOrBlank()) {
+                item(key = "firestore_warning") {
+                    ObsidianCard(
+                        shape = RoundedCornerShape(18.dp),
+                        borderTint = AmberJoker,
+                        borderAlpha = 0.35f,
+                        contentPadding = PaddingValues(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Historique cloud bloqué par Firestore",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = AmberJokerSoft
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = firestoreSyncWarning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
                         )
                     }
                 }

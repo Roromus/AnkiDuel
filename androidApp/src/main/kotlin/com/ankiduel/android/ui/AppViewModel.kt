@@ -35,6 +35,7 @@ class AppViewModel(
     val permissionHealth: StateFlow<PermissionHealth> = repository.permissionHealth
     val lockStatus: StateFlow<GlobalLockStatus> = repository.lockStatus
     val todayDevices: StateFlow<List<DeviceDailyContribution>> = repository.todayDevices
+    val firestoreSyncWarning: StateFlow<String?> = repository.firestoreSyncWarning
     val isIdleFlagged: StateFlow<Boolean> = repository.isIdleFlagged
     val trackingDiagnostics: StateFlow<TrackingDiagnostics> = repository.trackingDiagnostics
     val updateState: StateFlow<UpdateState> = updateManager.state

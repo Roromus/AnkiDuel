@@ -760,9 +760,9 @@ fun DashboardScreen(
                                 val others = duel.participants.filter { it.userId != userId }
                                 val anyHealthIssue = others.any { !it.appHealthOk || it.status == ParticipantStatus.TAMPER_ALERT }
                                 val cardsSummary = when {
-                                    others.isEmpty() -> "${me?.cardsReviewed ?: 0} cartes"
-                                    others.size == 1 -> "${others.first().username} : ${others.first().cardsReviewed} cartes"
-                                    else -> "${leader?.username ?: "En tête"} : ${leader?.cardsReviewed ?: 0} cartes"
+                                    others.isEmpty() -> "Vous : ${formatCompactMinutes(me?.ankiMinutes ?: 0)} · ${me?.cardsReviewed ?: 0} cartes"
+                                    others.size == 1 -> "Vous : ${formatCompactMinutes(me?.ankiMinutes ?: 0)} · ${others.first().username} : ${others.first().cardsReviewed} cartes"
+                                    else -> "Vous : ${formatCompactMinutes(me?.ankiMinutes ?: 0)} · ${leader?.username ?: "En tête"} : ${leader?.cardsReviewed ?: 0} cartes"
                                 }
                                 Text(
                                     text = "${duel.participants.size}/${duel.config.maxPlayers} joueurs · Mode $modeLabel",

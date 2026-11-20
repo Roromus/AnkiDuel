@@ -73,9 +73,12 @@ class DuelMonitorService : Service() {
                 runCatching {
                     repo.refreshAndSync()
                     val usage = repo.usageSnapshot.value
+                    val devices = repo.todayDevices.value
                     val lock = repo.lockStatus.value
-                    val ankiMin = usage.ankiEffectiveSeconds / 60L
-                    val socialMin = usage.socialForegroundSeconds / 60L
+                    val totalAnkiSec = if (devices.isNotEmpty()) devices.sumOf { it.ankiEffectiveSeconds } else usage.ankiEffectiveSeconds
+                    val totalSocialSec = if (devices.isNotEmpty()) devices.sumOf { it.socialSeconds } else usage.socialForegroundSeconds
+                    val ankiMin = totalAnkiSec / 60L
+                    val socialMin = totalSocialSec / 60L
                     val statusText = if (lock.isLocked) {
                         "Réseaux bloqués • ${lock.maxDebtMinutes} min Anki à rattraper (Anki ${ankiMin}m / Soc ${socialMin}m)"
                     } else {

@@ -90,6 +90,12 @@ class AnkiDuelRepository(
     private val _todayDevices = MutableStateFlow<List<DeviceDailyContribution>>(emptyList())
     val todayDevices: StateFlow<List<DeviceDailyContribution>> = _todayDevices.asStateFlow()
 
+    private val _firestoreSyncWarning = MutableStateFlow<String?>(null)
+    val firestoreSyncWarning: StateFlow<String?> = _firestoreSyncWarning.asStateFlow()
+
+    @Volatile
+    private var lastRemoteUserStatsDevices: List<DeviceDailyContribution> = emptyList()
+
     private var realtimeJob: Job? = null
     private var listeningUserId: String? = null
 
@@ -347,20 +353,49 @@ class AnkiDuelRepository(
             )
             demoBot.syncSnapshot(snapshot)
         } else if (!current.userId.isNullOrBlank()) {
-            runCatching {
-                _todayDevices.value = firebase.upsertDeviceAndCombinedDailyStat(
+            val remoteDevicesRes = runCatching {
+                firebase.upsertDeviceAndCombinedDailyStat(
                     userId = current.userId,
                     snapshot = snapshot,
                     todayKey = todayKey
                 )
             }
+            remoteDevicesRes
+                .onSuccess { devices ->
+                    lastRemoteUserStatsDevices = devices
+                    _firestoreSyncWarning.value = null
+                }
+                .onFailure { err ->
+                    val msg = err.message.orEmpty()
+                    if (msg.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                        _firestoreSyncWarning.value =
+                            "Règles Firestore (userStats) non déployées : les stats 7j/30j et la synchro hors duel nécessitent de publier firestore.rules."
+                    }
+                }
+
+            val seedDevices = mergeDeviceContributions(
+                remoteDevices = lastRemoteUserStatsDevices,
+                duels = _duels.value,
+                userId = current.userId,
+                todayKey = todayKey,
+                localSnapshot = snapshot
+            )
+            _todayDevices.value = seedDevices
+
             runCatching {
                 val remoteDuels = firebase.fetchDuels(current.userId)
                 remoteDuels.map { duel ->
                     if (duel.status == DuelStatus.ACTIVE) {
                         runCatching {
-                            firebase.syncUsage(duel.duelId, current.userId, snapshot, _todayDevices.value)
-                        }.getOrDefault(duel)
+                            firebase.syncUsage(duel.duelId, current.userId, snapshot, seedDevices)
+                        }.getOrElse { err ->
+                            val msg = err.message.orEmpty()
+                            if (msg.contains("PERMISSION_DENIED", ignoreCase = true)) {
+                                _firestoreSyncWarning.value =
+                                    "Erreur de permission Firestore sur le duel (${err.message})."
+                            }
+                            duel
+                        }
                     } else duel
                 }
             }.getOrElse { _duels.value }
@@ -369,6 +404,15 @@ class AnkiDuelRepository(
         }
 
         _duels.value = updatedDuels
+        if (!current.demoMode && !current.userId.isNullOrBlank()) {
+            _todayDevices.value = mergeDeviceContributions(
+                remoteDevices = lastRemoteUserStatsDevices,
+                duels = updatedDuels,
+                userId = current.userId,
+                todayKey = todayKey,
+                localSnapshot = snapshot
+            )
+        }
         val finalTracked = current.trackedSocialPackages + updatedDuels
             .filter { it.status == DuelStatus.ACTIVE }
             .flatMap { it.config.mandatorySocialPackages }
@@ -388,24 +432,87 @@ class AnkiDuelRepository(
         val isSelf = targetUserId == (current.userId ?: "local-demo-user") ||
             (current.demoMode && targetUserId == "local-demo-user")
         val todaySnap = _usageSnapshot.value
+        val combinedDevices = _todayDevices.value
 
         return (days - 1 downTo 0).map { daysAgo ->
             val dayKey = today.minusDays(daysAgo.toLong()).toString()
             val existing = byDay[dayKey]
-            if (daysAgo == 0 && isSelf && existing == null) {
-                DailyStatRecord(
-                    dayKey = dayKey,
-                    userId = targetUserId,
-                    ankiEffectiveSeconds = todaySnap.ankiEffectiveSeconds,
-                    cardsReviewed = todaySnap.cardsReviewed,
-                    socialSeconds = todaySnap.socialForegroundSeconds,
-                    netScoreSeconds = todaySnap.ankiEffectiveSeconds - todaySnap.socialForegroundSeconds,
-                    updatedAtEpochMs = todaySnap.capturedAtEpochMs
-                )
+            if (daysAgo == 0 && isSelf) {
+                val devAnki = if (combinedDevices.isNotEmpty()) combinedDevices.sumOf { it.ankiEffectiveSeconds } else todaySnap.ankiEffectiveSeconds
+                val devSocial = if (combinedDevices.isNotEmpty()) combinedDevices.sumOf { it.socialSeconds } else todaySnap.socialForegroundSeconds
+                val devCards = if (combinedDevices.isNotEmpty()) maxOf(todaySnap.cardsReviewed, combinedDevices.maxOfOrNull { it.cardsReviewed } ?: 0) else todaySnap.cardsReviewed
+                if (existing == null || devAnki > existing.ankiEffectiveSeconds || devSocial > existing.socialSeconds || devCards > existing.cardsReviewed) {
+                    DailyStatRecord(
+                        dayKey = dayKey,
+                        userId = targetUserId,
+                        ankiEffectiveSeconds = maxOf(existing?.ankiEffectiveSeconds ?: 0L, devAnki),
+                        cardsReviewed = maxOf(existing?.cardsReviewed ?: 0, devCards),
+                        socialSeconds = maxOf(existing?.socialSeconds ?: 0L, devSocial),
+                        netScoreSeconds = maxOf(existing?.ankiEffectiveSeconds ?: 0L, devAnki) - maxOf(existing?.socialSeconds ?: 0L, devSocial),
+                        updatedAtEpochMs = todaySnap.capturedAtEpochMs
+                    )
+                } else {
+                    existing
+                }
             } else {
                 existing ?: DailyStatRecord(dayKey = dayKey, userId = targetUserId)
             }
         }
+    }
+
+    private fun mergeDeviceContributions(
+        remoteDevices: List<DeviceDailyContribution>,
+        duels: List<DuelState>,
+        userId: String,
+        todayKey: String,
+        localSnapshot: UsageSnapshot
+    ): List<DeviceDailyContribution> {
+        val byDevice = linkedMapOf<String, DeviceDailyContribution>()
+
+        fun upsert(dev: DeviceDailyContribution) {
+            if (dev.dayKey != todayKey || dev.deviceId.isBlank()) return
+            val existing = byDevice[dev.deviceId]
+            byDevice[dev.deviceId] = if (existing == null) {
+                dev
+            } else {
+                existing.copy(
+                    deviceName = dev.deviceName.ifBlank { existing.deviceName },
+                    ankiEffectiveSeconds = maxOf(existing.ankiEffectiveSeconds, dev.ankiEffectiveSeconds),
+                    cardsReviewed = maxOf(existing.cardsReviewed, dev.cardsReviewed),
+                    socialSeconds = maxOf(existing.socialSeconds, dev.socialSeconds),
+                    permissionsHealthy = existing.permissionsHealthy && dev.permissionsHealthy,
+                    appHealthOk = if (dev.lastSyncEpochMs >= existing.lastSyncEpochMs) dev.appHealthOk else existing.appHealthOk,
+                    appHealthIssue = if (dev.lastSyncEpochMs >= existing.lastSyncEpochMs) dev.appHealthIssue else existing.appHealthIssue,
+                    lastSyncEpochMs = maxOf(existing.lastSyncEpochMs, dev.lastSyncEpochMs)
+                )
+            }
+        }
+
+        remoteDevices.forEach(::upsert)
+
+        duels.forEach { duel ->
+            val me = duel.participants.firstOrNull { it.userId == userId } ?: return@forEach
+            me.deviceContributions.values.forEach(::upsert)
+        }
+
+        if (localSnapshot.deviceId.isNotBlank()) {
+            upsert(
+                DeviceDailyContribution(
+                    deviceId = localSnapshot.deviceId,
+                    deviceName = localSnapshot.deviceName,
+                    dayKey = todayKey,
+                    ankiEffectiveSeconds = localSnapshot.ankiEffectiveSeconds.coerceAtLeast(0L),
+                    cardsReviewed = localSnapshot.cardsReviewed.coerceAtLeast(0),
+                    socialSeconds = localSnapshot.socialForegroundSeconds.coerceAtLeast(0L),
+                    permissionsHealthy = localSnapshot.permissionsHealthy,
+                    appHealthOk = localSnapshot.appHealthOk,
+                    appHealthIssue = localSnapshot.appHealthIssue,
+                    lastSyncEpochMs = localSnapshot.capturedAtEpochMs
+                )
+            )
+        }
+
+        return byDevice.values.sortedByDescending { it.lastSyncEpochMs }
     }
 
     private fun mergeDuel(updated: DuelState) {
@@ -440,6 +547,17 @@ class AnkiDuelRepository(
         realtimeJob = scope.launch {
             firebase.observeDuels(userId).collect { latest ->
                 _duels.value = latest
+                val todayKey = Instant.ofEpochMilli(System.currentTimeMillis())
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+                    .toString()
+                _todayDevices.value = mergeDeviceContributions(
+                    remoteDevices = lastRemoteUserStatsDevices,
+                    duels = latest,
+                    userId = userId,
+                    todayKey = todayKey,
+                    localSnapshot = _usageSnapshot.value
+                )
                 val baseTracked = _session.value?.trackedSocialPackages ?: emptySet()
                 val mergedTracked = baseTracked + activeMandatoryPackages()
                 updateLockStatus(latest, userId, mergedTracked)

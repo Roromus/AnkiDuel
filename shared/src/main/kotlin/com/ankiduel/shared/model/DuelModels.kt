@@ -61,6 +61,8 @@ data class UsageSnapshot(
     val permissionsHealthy: Boolean = true,
     val trackedSocialPackages: Set<String> = emptySet(),
     val ankiApiConnected: Boolean = false,
+    val appHealthOk: Boolean = true,
+    val appHealthIssue: String? = null,
     val capturedAtEpochMs: Long
 )
 
@@ -83,7 +85,9 @@ data class ParticipantState(
     val carryOverAnkiSeconds: Long = 0L,
     val carryOverSocialSeconds: Long = 0L,
     val carryOverCardsReviewed: Int = 0,
-    val ankiApiConnected: Boolean = false
+    val ankiApiConnected: Boolean = false,
+    val appHealthOk: Boolean = true,
+    val appHealthIssue: String? = null
 ) {
     val ankiMinutes: Int get() = (ankiEffectiveSeconds / 60L).toInt()
     val socialMinutes: Int get() = (socialSeconds / 60L).toInt()
@@ -113,3 +117,18 @@ data class GlobalLockStatus(
     val leaderUsername: String?,
     val jokerActiveUntilEpochMs: Long
 )
+
+@Serializable
+data class DailyStatRecord(
+    val dayKey: String,
+    val userId: String = "",
+    val ankiEffectiveSeconds: Long = 0L,
+    val cardsReviewed: Int = 0,
+    val socialSeconds: Long = 0L,
+    val netScoreSeconds: Long = 0L,
+    val updatedAtEpochMs: Long = 0L
+) {
+    val ankiMinutes: Int get() = (ankiEffectiveSeconds / 60L).toInt()
+    val socialMinutes: Int get() = (socialSeconds / 60L).toInt()
+    val netScoreMinutes: Int get() = (netScoreSeconds / 60.0).toInt()
+}

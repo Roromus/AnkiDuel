@@ -303,13 +303,26 @@ fun DuelsScreen(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "En tête · ${formatCompactMinutes(leader?.netScoreMinutes ?: 0, showSign = true)}",
+                                            text = "En tête · ${formatCompactMinutes(leader?.netScoreMinutes ?: 0, showSign = true)} · ${leader?.cardsReviewed ?: 0} cartes",
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 fontFeatureSettings = TabularFeatures,
                                                 fontWeight = FontWeight.Normal
                                             ),
                                             color = TextMuted
                                         )
+                                        val others = duel.participants.filter { it.userId != userId }
+                                        if (others.isNotEmpty()) {
+                                            val issuePlayer = others.firstOrNull { !it.appHealthOk || it.status == ParticipantStatus.TAMPER_ALERT }
+                                            Spacer(Modifier.height(4.dp))
+                                            StatusPill(
+                                                text = if (issuePlayer != null) {
+                                                    "${issuePlayer.username} : ${issuePlayer.appHealthIssue ?: "Config à vérifier"}"
+                                                } else {
+                                                    "Apps adverses OK"
+                                                },
+                                                color = if (issuePlayer != null) SocialCoralSoft else SafeEmeraldSoft
+                                            )
+                                        }
                                     }
                                 }
 

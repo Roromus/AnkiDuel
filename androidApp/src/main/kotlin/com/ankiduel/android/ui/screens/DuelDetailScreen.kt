@@ -320,9 +320,21 @@ fun DuelDetailScreen(
                                     }
                                 }
                                 Text(
-                                    text = if (p.cardsReviewed > 0) "${p.cardsReviewed} cartes révisées" else "Temps d'écran suivi",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextMuted
+                                    text = "${p.cardsReviewed} cartes révisées",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFeatureSettings = TabularFeatures
+                                    ),
+                                    color = TextSecondary
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                val isHealthOk = p.appHealthOk && p.status != ParticipantStatus.TAMPER_ALERT
+                                StatusPill(
+                                    text = if (isHealthOk) {
+                                        "App OK"
+                                    } else {
+                                        p.appHealthIssue ?: "Problème de config"
+                                    },
+                                    color = if (isHealthOk) SafeEmeraldSoft else SocialCoralSoft
                                 )
                             }
 

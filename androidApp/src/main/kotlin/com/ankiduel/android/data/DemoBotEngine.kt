@@ -1,6 +1,7 @@
 package com.ankiduel.android.data
 
 import com.ankiduel.shared.engine.DuelDeltaCalculator
+import com.ankiduel.shared.model.DailyStatRecord
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelCycle
 import com.ankiduel.shared.model.DuelState
@@ -122,7 +123,9 @@ class DemoBotEngine(
                         socialSeconds = 10 * 60L, // net 10m
                         cardsReviewed = 31,
                         lastSyncEpochMs = now,
-                        ankiApiConnected = true
+                        ankiApiConnected = true,
+                        appHealthOk = false,
+                        appHealthIssue = "Accessibilité coupée"
                     )
                 ),
                 createdAtEpochMs = now - 7_200_000L
@@ -162,13 +165,50 @@ class DemoBotEngine(
                         socialSeconds = snapshot.socialForegroundSeconds,
                         cardsReviewed = if (healthy) snapshot.cardsReviewed else p.cardsReviewed,
                         lastSyncEpochMs = now,
-                        ankiApiConnected = snapshot.ankiApiConnected
+                        ankiApiConnected = snapshot.ankiApiConnected,
+                        appHealthOk = snapshot.appHealthOk,
+                        appHealthIssue = snapshot.appHealthIssue
                     )
                 }
             }
             duels[i] = DuelDeltaCalculator.recalculateDuel(duel.copy(participants = updatedParticipants))
         }
         return duels.toList()
+    }
+
+    @Synchronized
+    fun getDemoStats(targetUserId: String, days: Int = 30, todayUsage: UsageSnapshot? = null): List<DailyStatRecord> {
+        val today = LocalDate.now()
+        val seedOffset = targetUserId.hashCode().let { kotlin.math.abs(it) % 17 }
+        return (days - 1 downTo 0).map { daysAgo ->
+            val date = today.minusDays(daysAgo.toLong())
+            val dayKey = date.toString()
+            if (daysAgo == 0 && targetUserId == userId && todayUsage != null) {
+                DailyStatRecord(
+                    dayKey = dayKey,
+                    userId = targetUserId,
+                    ankiEffectiveSeconds = todayUsage.ankiEffectiveSeconds,
+                    cardsReviewed = todayUsage.cardsReviewed,
+                    socialSeconds = todayUsage.socialForegroundSeconds,
+                    netScoreSeconds = todayUsage.ankiEffectiveSeconds - todayUsage.socialForegroundSeconds,
+                    updatedAtEpochMs = todayUsage.capturedAtEpochMs
+                )
+            } else {
+                val wave = ((daysAgo * 7 + seedOffset) % 11)
+                val ankiMin = (15 + wave * 4).toLong()
+                val socialMin = (5 + ((daysAgo * 3 + seedOffset) % 8) * 3).toLong()
+                val cards = 25 + wave * 7
+                DailyStatRecord(
+                    dayKey = dayKey,
+                    userId = targetUserId,
+                    ankiEffectiveSeconds = ankiMin * 60L,
+                    cardsReviewed = cards,
+                    socialSeconds = socialMin * 60L,
+                    netScoreSeconds = (ankiMin - socialMin) * 60L,
+                    updatedAtEpochMs = System.currentTimeMillis()
+                )
+            }
+        }
     }
 
     @Synchronized

@@ -1,6 +1,7 @@
 package com.ankiduel.android.data
 
 import com.ankiduel.shared.engine.DuelDeltaCalculator
+import com.ankiduel.shared.model.DailyStatRecord
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelCycle
 import com.ankiduel.shared.model.DuelState
@@ -12,6 +13,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -306,6 +308,8 @@ class FirebaseBackendClient(
                             socialSeconds = nextSocial,
                             cardsReviewed = carryCards + todayCards,
                             ankiApiConnected = snapshot.ankiApiConnected,
+                            appHealthOk = snapshot.appHealthOk,
+                            appHealthIssue = snapshot.appHealthIssue,
                             lastSyncEpochMs = now,
                             lastSyncDayKey = todayKey,
                             carryOverAnkiSeconds = carryAnki,
@@ -318,6 +322,8 @@ class FirebaseBackendClient(
                             status = ParticipantStatus.TAMPER_ALERT,
                             socialSeconds = nextSocial,
                             ankiApiConnected = snapshot.ankiApiConnected,
+                            appHealthOk = snapshot.appHealthOk,
+                            appHealthIssue = snapshot.appHealthIssue ?: "Permissions manquantes",
                             lastSyncEpochMs = now,
                             lastSyncDayKey = todayKey,
                             carryOverAnkiSeconds = carryAnki,
@@ -517,6 +523,44 @@ class FirebaseBackendClient(
             if (!exists) return candidate
         }
         return generateInviteCode()
+    }
+
+    private fun userStatsDaysCol(userId: String) =
+        firestore.collection("userStats").document(userId).collection("days")
+
+    suspend fun upsertDailyStat(userId: String, record: DailyStatRecord) {
+        val data = mapOf(
+            "userId" to userId,
+            "dayKey" to record.dayKey,
+            "ankiEffectiveSeconds" to record.ankiEffectiveSeconds.coerceIn(0L, 86400L),
+            "cardsReviewed" to record.cardsReviewed.coerceIn(0, 100000),
+            "socialSeconds" to record.socialSeconds.coerceIn(0L, 86400L),
+            "netScoreSeconds" to record.netScoreSeconds.coerceIn(-864000L, 864000L),
+            "updatedAtEpochMs" to record.updatedAtEpochMs.coerceAtLeast(0L)
+        )
+        userStatsDaysCol(userId).document(record.dayKey).set(data).await()
+    }
+
+    suspend fun fetchDailyStats(userId: String, days: Int = 30): List<DailyStatRecord> {
+        val cutoffKey = LocalDate.now().minusDays((days - 1).coerceAtLeast(0).toLong()).toString()
+        val snap = userStatsDaysCol(userId)
+            .whereGreaterThanOrEqualTo("dayKey", cutoffKey)
+            .orderBy("dayKey", Query.Direction.ASCENDING)
+            .get()
+            .await()
+
+        return snap.documents.mapNotNull { doc ->
+            val dayKey = doc.getString("dayKey") ?: return@mapNotNull null
+            DailyStatRecord(
+                dayKey = dayKey,
+                userId = doc.getString("userId") ?: userId,
+                ankiEffectiveSeconds = doc.getLong("ankiEffectiveSeconds") ?: 0L,
+                cardsReviewed = (doc.getLong("cardsReviewed") ?: 0L).toInt(),
+                socialSeconds = doc.getLong("socialSeconds") ?: 0L,
+                netScoreSeconds = doc.getLong("netScoreSeconds") ?: 0L,
+                updatedAtEpochMs = doc.getLong("updatedAtEpochMs") ?: 0L
+            )
+        }
     }
 
     private fun generateInviteCode(): String {

@@ -10,6 +10,7 @@ import com.ankiduel.android.tracking.InstalledAppItem
 import com.ankiduel.android.tracking.PermissionHealth
 import com.ankiduel.android.update.AppUpdateManager
 import com.ankiduel.android.update.UpdateState
+import com.ankiduel.shared.model.DailyStatRecord
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.GlobalLockStatus
@@ -45,6 +46,18 @@ class AppViewModel(
 
     private val _feedbackMessage = MutableStateFlow<String?>(null)
     val feedbackMessage: StateFlow<String?> = _feedbackMessage.asStateFlow()
+
+    private val _personalStats = MutableStateFlow<List<DailyStatRecord>>(emptyList())
+    val personalStats: StateFlow<List<DailyStatRecord>> = _personalStats.asStateFlow()
+
+    private val _opponentStats = MutableStateFlow<List<DailyStatRecord>>(emptyList())
+    val opponentStats: StateFlow<List<DailyStatRecord>> = _opponentStats.asStateFlow()
+
+    private val _selectedOpponentId = MutableStateFlow<String?>(null)
+    val selectedOpponentId: StateFlow<String?> = _selectedOpponentId.asStateFlow()
+
+    private val _statsLoading = MutableStateFlow(false)
+    val statsLoading: StateFlow<Boolean> = _statsLoading.asStateFlow()
 
     init {
         loadInstalledApps()
@@ -180,6 +193,33 @@ class AppViewModel(
     fun activeMandatoryPackages(): Set<String> = repository.activeMandatoryPackages()
 
     fun hasActiveDuel(): Boolean = repository.hasActiveDuel()
+
+    fun selectStatsOpponent(opponentUserId: String?) {
+        _selectedOpponentId.value = opponentUserId
+        loadStats(opponentUserId)
+    }
+
+    fun loadStats(opponentUserId: String? = _selectedOpponentId.value) {
+        val current = session.value ?: return
+        val selfId = if (current.demoMode) "local-demo-user" else current.userId ?: return
+        viewModelScope.launch {
+            _statsLoading.value = true
+            try {
+                _personalStats.value = withContext(Dispatchers.IO) {
+                    repository.fetchDailyStats(selfId, days = 30)
+                }
+                _opponentStats.value = if (!opponentUserId.isNullOrBlank()) {
+                    withContext(Dispatchers.IO) {
+                        repository.fetchDailyStats(opponentUserId, days = 30)
+                    }
+                } else {
+                    emptyList()
+                }
+            } finally {
+                _statsLoading.value = false
+            }
+        }
+    }
 
     private fun launchAction(block: suspend () -> Unit) {
         viewModelScope.launch {

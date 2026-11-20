@@ -34,6 +34,20 @@ rules_version = '2';
 //                                        values are JSON-serialized ParticipantState, 2..2048 chars each)
 //   - createdAtEpochMs: number (required, immutable, >= 0) - Duel creation timestamp in epoch ms
 //
+// Subcollection: userStats/{userId}/days
+// Document ID: {dayKey} (YYYY-MM-DD)
+// Privacy: No PII (only numeric daily usage/study statistics).
+//          Authenticated read allows users to read their own stats and compare
+//          weekly/monthly stats with opponents in active duels.
+// Fields (exact 7 keys):
+//   - userId: string (required, immutable, == userId, 1..128 chars) - Firebase Auth UID
+//   - dayKey: string (required, immutable, == dayKey, YYYY-MM-DD) - Calendar day key
+//   - ankiEffectiveSeconds: int (required, 0..86400) - Effective Anki study seconds
+//   - cardsReviewed: int (required, 0..100000) - Number of Anki cards reviewed
+//   - socialSeconds: int (required, 0..86400) - Social/blocked app usage seconds
+//   - netScoreSeconds: int (required, -864000..864000) - Daily net score in seconds
+//   - updatedAtEpochMs: int (required, >= 0) - Last sync timestamp in epoch ms
+//
 // ===============================================================
 
 service cloud.firestore {
@@ -222,6 +236,39 @@ service cloud.firestore {
              request.resource.data.participantIds.hasAll(resource.data.participantIds);
     }
 
+    function isValidUserDayStats(data, userId, dayKey) {
+      let allowedFields = [
+        'userId',
+        'dayKey',
+        'ankiEffectiveSeconds',
+        'cardsReviewed',
+        'socialSeconds',
+        'netScoreSeconds',
+        'updatedAtEpochMs'
+      ];
+      return hasRequiredFields(allowedFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             isBoundedString(data.userId, 1, 128) &&
+             data.userId == userId &&
+             isBoundedString(data.dayKey, 10, 10) &&
+             data.dayKey == dayKey &&
+             data.dayKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+             data.ankiEffectiveSeconds is int &&
+             data.ankiEffectiveSeconds >= 0 &&
+             data.ankiEffectiveSeconds <= 86400 &&
+             data.cardsReviewed is int &&
+             data.cardsReviewed >= 0 &&
+             data.cardsReviewed <= 100000 &&
+             data.socialSeconds is int &&
+             data.socialSeconds >= 0 &&
+             data.socialSeconds <= 86400 &&
+             data.netScoreSeconds is int &&
+             data.netScoreSeconds >= -864000 &&
+             data.netScoreSeconds <= 864000 &&
+             data.updatedAtEpochMs is int &&
+             data.updatedAtEpochMs >= 0;
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -250,6 +297,21 @@ service cloud.firestore {
       allow update: if isValidParticipantUpdate(duelId) ||
                        isValidJoinUpdate(duelId);
       allow delete: if isDuelCreator();
+    }
+
+    // Daily study/usage stats contain no PII and are readable by authenticated users
+    // (for self-stats and comparing weekly/monthly stats with opponents in active duels),
+    // but strictly writable/deletable only by the owning user.
+    match /userStats/{userId}/days/{dayKey} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) &&
+                       isValidUserDayStats(request.resource.data, userId, dayKey) &&
+                       uidUnchanged(userId);
+      allow update: if isOwner(userId) &&
+                       isValidUserDayStats(request.resource.data, userId, dayKey) &&
+                       uidNotModified() &&
+                       areImmutableFieldsUnchanged(['userId', 'dayKey']);
+      allow delete: if isOwner(userId);
     }
 
     // Default deny for all other paths and subcollections

@@ -9,6 +9,7 @@ import com.ankiduel.android.tracking.PermissionHealthChecker
 import com.ankiduel.android.tracking.UsageStatsTracker
 import com.ankiduel.shared.engine.AntiIdleValidator
 import com.ankiduel.shared.engine.DuelDeltaCalculator
+import com.ankiduel.shared.model.DailyStatRecord
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.DuelStatus
@@ -275,6 +276,12 @@ class AnkiDuelRepository(
         prefs.saveAntiIdleState(idleResult.nextState, todayKey)
         _isIdleFlagged.value = idleResult.isIdleFlagged
 
+        val (remoteHealthOk, remoteHealthIssue) = if (current.demoMode) {
+            true to null
+        } else {
+            health.evaluateRemoteHealth()
+        }
+
         val snapshot = UsageSnapshot(
             ankiForegroundSeconds = rawAnki,
             ankiEffectiveSeconds = idleResult.effectiveSeconds,
@@ -284,6 +291,8 @@ class AnkiDuelRepository(
             permissionsHealthy = if (current.demoMode) true else health.allEnforcementPermissionsHealthy,
             trackedSocialPackages = tracked,
             ankiApiConnected = ankiApi.apiConnected,
+            appHealthOk = remoteHealthOk,
+            appHealthIssue = remoteHealthIssue,
             capturedAtEpochMs = nowMs
         )
         _usageSnapshot.value = snapshot
@@ -299,6 +308,20 @@ class AnkiDuelRepository(
         val updatedDuels = if (current.demoMode) {
             demoBot.syncSnapshot(snapshot)
         } else if (!current.userId.isNullOrBlank()) {
+            runCatching {
+                firebase.upsertDailyStat(
+                    userId = current.userId,
+                    record = DailyStatRecord(
+                        dayKey = todayKey,
+                        userId = current.userId,
+                        ankiEffectiveSeconds = idleResult.effectiveSeconds,
+                        cardsReviewed = ankiApi.cardsReviewedToday,
+                        socialSeconds = rawSocial,
+                        netScoreSeconds = idleResult.effectiveSeconds - rawSocial,
+                        updatedAtEpochMs = nowMs
+                    )
+                )
+            }
             runCatching {
                 val remoteDuels = firebase.fetchDuels(current.userId)
                 remoteDuels.map { duel ->
@@ -319,6 +342,38 @@ class AnkiDuelRepository(
             .flatMap { it.config.mandatorySocialPackages }
             .toSet()
         updateLockStatus(updatedDuels, current.userId.orEmpty(), finalTracked)
+    }
+
+    suspend fun fetchDailyStats(targetUserId: String, days: Int = 30): List<DailyStatRecord> {
+        val current = prefs.getSession()
+        val raw = if (current.demoMode) {
+            demoBot.getDemoStats(targetUserId, days, _usageSnapshot.value)
+        } else {
+            runCatching { firebase.fetchDailyStats(targetUserId, days) }.getOrDefault(emptyList())
+        }
+        val byDay = raw.associateBy { it.dayKey }
+        val today = java.time.LocalDate.now()
+        val isSelf = targetUserId == (current.userId ?: "local-demo-user") ||
+            (current.demoMode && targetUserId == "local-demo-user")
+        val todaySnap = _usageSnapshot.value
+
+        return (days - 1 downTo 0).map { daysAgo ->
+            val dayKey = today.minusDays(daysAgo.toLong()).toString()
+            val existing = byDay[dayKey]
+            if (daysAgo == 0 && isSelf && existing == null) {
+                DailyStatRecord(
+                    dayKey = dayKey,
+                    userId = targetUserId,
+                    ankiEffectiveSeconds = todaySnap.ankiEffectiveSeconds,
+                    cardsReviewed = todaySnap.cardsReviewed,
+                    socialSeconds = todaySnap.socialForegroundSeconds,
+                    netScoreSeconds = todaySnap.ankiEffectiveSeconds - todaySnap.socialForegroundSeconds,
+                    updatedAtEpochMs = todaySnap.capturedAtEpochMs
+                )
+            } else {
+                existing ?: DailyStatRecord(dayKey = dayKey, userId = targetUserId)
+            }
+        }
     }
 
     private fun mergeDuel(updated: DuelState) {

@@ -25,6 +25,16 @@ data class PermissionHealth(
 ) {
     val allEnforcementPermissionsHealthy: Boolean
         get() = usageAccessGranted && accessibilityGranted && overlayGranted
+
+    fun evaluateRemoteHealth(): Pair<Boolean, String?> = when {
+        !usageAccessGranted -> false to "Accès utilisation manquant"
+        !accessibilityGranted -> false to "Accessibilité coupée"
+        !overlayGranted -> false to "Superposition manquante"
+        !ankiDroidInstalled -> false to "AnkiDroid non installé"
+        !ankiDroidApiGranted -> false to "API AnkiDroid non autorisée"
+        !ignoringBatteryOptimizations -> false to "Optimisation batterie active"
+        else -> true to null
+    }
 }
 
 class PermissionHealthChecker(private val context: Context) {

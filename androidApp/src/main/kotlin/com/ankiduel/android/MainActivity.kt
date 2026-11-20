@@ -34,9 +34,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.SpaceDashboard
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.SpaceDashboard
 import androidx.compose.material.icons.rounded.SystemUpdate
@@ -77,6 +79,7 @@ import com.ankiduel.android.ui.screens.DashboardScreen
 import com.ankiduel.android.ui.screens.DuelDetailScreen
 import com.ankiduel.android.ui.screens.DuelsScreen
 import com.ankiduel.android.ui.screens.PermissionsScreen
+import com.ankiduel.android.ui.screens.StatsScreen
 import com.ankiduel.android.ui.theme.AnkiBlue
 import com.ankiduel.android.ui.theme.AnkiBlueSoft
 import com.ankiduel.android.ui.theme.AnkiDuelTheme
@@ -97,6 +100,7 @@ private enum class MainTab(
 ) {
     DASHBOARD("Accueil", Icons.Rounded.SpaceDashboard, Icons.Outlined.SpaceDashboard),
     DUELS("Duels", Icons.Rounded.EmojiEvents, Icons.Outlined.EmojiEvents),
+    STATS("Stats", Icons.Rounded.BarChart, Icons.Outlined.BarChart),
     SETTINGS("Paramètres", Icons.Rounded.Tune, Icons.Outlined.Tune)
 }
 
@@ -106,6 +110,7 @@ private enum class RootRoute {
     DUEL_DETAIL,
     DASHBOARD,
     DUELS,
+    STATS,
     SETTINGS
 }
 
@@ -151,6 +156,10 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
     val isBusy by viewModel.isBusy.collectAsState()
     val feedback by viewModel.feedbackMessage.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
+    val personalStats by viewModel.personalStats.collectAsState()
+    val opponentStats by viewModel.opponentStats.collectAsState()
+    val selectedOpponentId by viewModel.selectedOpponentId.collectAsState()
+    val statsLoading by viewModel.statsLoading.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showPermissions by remember { mutableStateOf(false) }
@@ -212,7 +221,14 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
         selectedDuelId != null -> RootRoute.DUEL_DETAIL
         currentTab == MainTab.DASHBOARD -> RootRoute.DASHBOARD
         currentTab == MainTab.DUELS -> RootRoute.DUELS
+        currentTab == MainTab.STATS -> RootRoute.STATS
         else -> RootRoute.SETTINGS
+    }
+
+    LaunchedEffect(activeRoute, isAuthenticated) {
+        if (isAuthenticated && activeRoute == RootRoute.STATS) {
+            viewModel.loadStats()
+        }
     }
 
     Scaffold(
@@ -314,6 +330,19 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                             onCreateDuel = { config -> viewModel.createDuel(config) },
                             onJoinDuel = { code -> viewModel.joinDuel(code) },
                             onSelectDuel = { selectedDuelId = it }
+                        )
+                    }
+
+                    RootRoute.STATS -> {
+                        StatsScreen(
+                            selfUserId = if (currentSession.demoMode) "local-demo-user" else currentSession.userId.orEmpty(),
+                            duels = duels,
+                            personalStats = personalStats,
+                            opponentStats = opponentStats,
+                            selectedOpponentId = selectedOpponentId,
+                            isLoading = statsLoading,
+                            onSelectOpponent = { viewModel.selectStatsOpponent(it) },
+                            onRefresh = { viewModel.loadStats() }
                         )
                     }
 

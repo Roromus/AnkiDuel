@@ -729,11 +729,47 @@ fun DashboardScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                val leader = duel.participants
+                                    .filter { it.status != ParticipantStatus.FORFEITED }
+                                    .maxByOrNull { it.netScoreSeconds }
+                                    ?: duel.participants.maxByOrNull { it.netScoreSeconds }
+                                val others = duel.participants.filter { it.userId != userId }
+                                val anyHealthIssue = others.any { !it.appHealthOk || it.status == ParticipantStatus.TAMPER_ALERT }
+                                val cardsSummary = when {
+                                    others.isEmpty() -> "${me?.cardsReviewed ?: 0} cartes"
+                                    others.size == 1 -> "${others.first().username} : ${others.first().cardsReviewed} cartes"
+                                    else -> "${leader?.username ?: "En tête"} : ${leader?.cardsReviewed ?: 0} cartes"
+                                }
                                 Text(
                                     text = "${duel.participants.size}/${duel.config.maxPlayers} joueurs · Mode $modeLabel",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextMuted
                                 )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = cardsSummary,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFeatureSettings = TabularFeatures
+                                        ),
+                                        color = AnkiBlueSoft,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (others.isNotEmpty()) {
+                                        val firstIssue = others.firstOrNull { !it.appHealthOk || it.status == ParticipantStatus.TAMPER_ALERT }
+                                        StatusPill(
+                                            text = if (anyHealthIssue) {
+                                                firstIssue?.appHealthIssue ?: "Config à vérifier"
+                                            } else {
+                                                "App OK"
+                                            },
+                                            color = if (anyHealthIssue) SocialCoralSoft else SafeEmeraldSoft
+                                        )
+                                    }
+                                }
                             }
 
                             Spacer(Modifier.width(10.dp))

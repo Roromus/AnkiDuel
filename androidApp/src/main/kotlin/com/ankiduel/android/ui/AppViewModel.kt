@@ -7,6 +7,8 @@ import com.ankiduel.android.data.AnkiDuelRepository
 import com.ankiduel.android.data.StoredSession
 import com.ankiduel.android.tracking.InstalledAppItem
 import com.ankiduel.android.tracking.PermissionHealth
+import com.ankiduel.android.update.AppUpdateManager
+import com.ankiduel.android.update.UpdateState
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.GlobalLockStatus
@@ -17,7 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class AppViewModel(
-    private val repository: AnkiDuelRepository
+    private val repository: AnkiDuelRepository,
+    private val updateManager: AppUpdateManager
 ) : ViewModel() {
 
     val session: StateFlow<StoredSession?> = repository.session
@@ -26,6 +29,7 @@ class AppViewModel(
     val permissionHealth: StateFlow<PermissionHealth> = repository.permissionHealth
     val lockStatus: StateFlow<GlobalLockStatus> = repository.lockStatus
     val isIdleFlagged: StateFlow<Boolean> = repository.isIdleFlagged
+    val updateState: StateFlow<UpdateState> = updateManager.state
 
     private val _installedApps = MutableStateFlow<List<InstalledAppItem>>(emptyList())
     val installedApps: StateFlow<List<InstalledAppItem>> = _installedApps.asStateFlow()
@@ -38,6 +42,31 @@ class AppViewModel(
 
     init {
         loadInstalledApps()
+        checkForUpdates()
+    }
+
+    fun checkForUpdates(force: Boolean = false) {
+        viewModelScope.launch {
+            updateManager.checkAndUpdateIfAvailable(force = force)
+        }
+    }
+
+    fun onResumeUpdateCheck() {
+        updateManager.onResumeCheckPermission()
+        checkForUpdates()
+    }
+
+    fun installDownloadedUpdate() {
+        val ready = updateState.value as? UpdateState.ReadyToInstall ?: return
+        if (ready.needsInstallPermission) {
+            updateManager.openInstallPermissionSettings()
+        } else {
+            updateManager.launchInstaller(ready.apkFile)
+        }
+    }
+
+    fun dismissUpdatePrompt() {
+        updateManager.dismissPrompt()
     }
 
     fun clearFeedback() {
@@ -151,10 +180,13 @@ class AppViewModel(
         }
     }
 
-    class Factory(private val repository: AnkiDuelRepository) : ViewModelProvider.Factory {
+    class Factory(
+        private val repository: AnkiDuelRepository,
+        private val updateManager: AppUpdateManager
+    ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return AppViewModel(repository) as T
+            return AppViewModel(repository, updateManager) as T
         }
     }
 }

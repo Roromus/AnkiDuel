@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,13 +39,19 @@ import androidx.compose.material.icons.outlined.SpaceDashboard
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.SpaceDashboard
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -77,7 +84,10 @@ import com.ankiduel.android.ui.theme.HairlineBorderSubtle
 import com.ankiduel.android.ui.theme.ObsidianBg
 import com.ankiduel.android.ui.theme.SocialCoral
 import com.ankiduel.android.ui.theme.SurfaceBase
+import com.ankiduel.android.ui.theme.SurfaceCardElevated
 import com.ankiduel.android.ui.theme.TextMuted
+import com.ankiduel.android.ui.theme.TextPrimary
+import com.ankiduel.android.update.UpdateState
 
 private enum class MainTab(
     val label: String,
@@ -101,7 +111,8 @@ private enum class RootRoute {
 class MainActivity : ComponentActivity() {
 
     private val viewModel: AppViewModel by viewModels {
-        AppViewModel.Factory((application as AnkiDuelApplication).container.repository)
+        val container = (application as AnkiDuelApplication).container
+        AppViewModel.Factory(container.repository, container.updateManager)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,6 +133,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshAll()
+        viewModel.onResumeUpdateCheck()
     }
 }
 
@@ -136,6 +148,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
     val installedApps by viewModel.installedApps.collectAsState()
     val isBusy by viewModel.isBusy.collectAsState()
     val feedback by viewModel.feedbackMessage.collectAsState()
+    val updateState by viewModel.updateState.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showPermissions by remember { mutableStateOf(false) }
@@ -300,7 +313,130 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                     }
                 }
             }
+
+            AppUpdateOverlay(
+                updateState = updateState,
+                onInstallClick = viewModel::installDownloadedUpdate,
+                onDismiss = viewModel::dismissUpdatePrompt,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            )
         }
+    }
+}
+
+@Composable
+private fun AppUpdateOverlay(
+    updateState: UpdateState,
+    onInstallClick: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    when (updateState) {
+        is UpdateState.Downloading -> {
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(SurfaceCardElevated.copy(alpha = 0.96f))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SystemUpdate,
+                        contentDescription = null,
+                        tint = AnkiBlueSoft,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    val pctText = updateState.progressPercent?.let { " • $it%" } ?: ""
+                    Text(
+                        text = "Mise à jour v${updateState.versionName} en téléchargement$pctText",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary
+                    )
+                }
+                val progress = updateState.progressPercent
+                if (progress != null) {
+                    LinearProgressIndicator(
+                        progress = { progress / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = AnkiBlueSoft,
+                        trackColor = HairlineBorderSubtle
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = AnkiBlueSoft,
+                        trackColor = HairlineBorderSubtle
+                    )
+                }
+            }
+        }
+
+        is UpdateState.ReadyToInstall -> {
+            if (updateState.needsInstallPermission) {
+                AlertDialog(
+                    onDismissRequest = onDismiss,
+                    containerColor = SurfaceCardElevated,
+                    title = {
+                        Text(
+                            text = "Mise à jour v${updateState.versionName} prête",
+                            color = TextPrimary
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Autorisez AnkiDuel à installer des mises à jour pour appliquer automatiquement cette nouvelle version.",
+                            color = TextMuted
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = onInstallClick,
+                            colors = ButtonDefaults.buttonColors(containerColor = AnkiBlue)
+                        ) {
+                            Text("Autoriser et installer")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = onDismiss) {
+                            Text("Plus tard", color = TextMuted)
+                        }
+                    }
+                )
+            } else {
+                Row(
+                    modifier = modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(SurfaceCardElevated.copy(alpha = 0.96f))
+                        .clickable(onClick = onInstallClick)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SystemUpdate,
+                        contentDescription = null,
+                        tint = AnkiBlueSoft,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Mise à jour v${updateState.versionName} prête — Appuyer pour installer",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextPrimary
+                    )
+                }
+            }
+        }
+
+        UpdateState.Idle, UpdateState.Checking -> Unit
     }
 }
 

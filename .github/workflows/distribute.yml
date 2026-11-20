@@ -1,4 +1,4 @@
-name: Build & Distribute APK to Firebase
+name: Build, Release & Distribute APK
 
 on:
   push:
@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-distribute:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -43,6 +45,27 @@ jobs:
           ANKIDUEL_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANKIDUEL_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: ./gradlew :androidApp:assembleRelease --no-daemon
+
+      - name: Extract App Version
+        id: version
+        run: |
+          VERSION_NAME=$(grep -E 'versionName\s*=' androidApp/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION_CODE=$(grep -E 'versionCode\s*=' androidApp/build.gradle.kts | sed -E 's/.*=\s*([0-9]+).*/\1/')
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION_NAME}-${VERSION_CODE}.${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK_NAME="AnkiDuel-v${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk"
+          cp androidApp/build/outputs/apk/release/androidApp-release.apk "$APK_NAME"
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "$APK_NAME" \
+            --title "AnkiDuel v${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})" \
+            --notes "Build automatique depuis \`main\` (${{ github.sha }})." \
+            --generate-notes
 
       - name: Distribute to Firebase App Distribution
         uses: wzieba/Firebase-Distribution-Github-Action@v1

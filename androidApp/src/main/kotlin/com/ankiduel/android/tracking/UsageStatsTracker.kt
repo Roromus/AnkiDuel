@@ -7,7 +7,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import com.ankiduel.shared.model.SocialAppCatalog
-import java.time.LocalDate
+import java.time.Instant
 import java.time.ZoneId
 
 data class InstalledAppItem(
@@ -37,8 +37,11 @@ class UsageStatsTracker(private val context: Context) {
         trackedSocialPackages: Set<String>,
         nowMs: Long = System.currentTimeMillis()
     ): DailyUsageMeasurement {
-        val midnightMs = LocalDate.now()
-            .atStartOfDay(ZoneId.systemDefault())
+        val zone = ZoneId.systemDefault()
+        val midnightMs = Instant.ofEpochMilli(nowMs)
+            .atZone(zone)
+            .toLocalDate()
+            .atStartOfDay(zone)
             .toInstant()
             .toEpochMilli()
 
@@ -168,7 +171,9 @@ class UsageStatsTracker(private val context: Context) {
                     (pm.getLaunchIntentForPackage(info.packageName) != null || info.packageName in defaultSocialSet)
             }
             .filter { info ->
-                (info.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || info.packageName in defaultSocialSet
+                (info.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
+                    (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0 ||
+                    info.packageName in defaultSocialSet
             }
             .map { info ->
                 InstalledAppItem(
@@ -201,7 +206,7 @@ class UsageStatsTracker(private val context: Context) {
             windowEndMs: Long
         ): Map<String, Long> {
             val activeStartByPkg = mutableMapOf<String, Long>()
-            val activeClassesByPkg = mutableMapOf<String, MutableMap<String, Int>>()
+            val activeClassesByPkg = mutableMapOf<String, MutableSet<String>>()
             val accumulatedMs = mutableMapOf<String, Long>()
 
             fun closePackage(pkg: String, endTs: Long) {
@@ -237,8 +242,8 @@ class UsageStatsTracker(private val context: Context) {
                         }
                         if (ev.packageName in targetPackages) {
                             val clsKey = ev.className.ifBlank { DEFAULT_CLASS_KEY }
-                            val classes = activeClassesByPkg.getOrPut(ev.packageName) { mutableMapOf() }
-                            classes[clsKey] = (classes[clsKey] ?: 0) + 1
+                            val classes = activeClassesByPkg.getOrPut(ev.packageName) { mutableSetOf() }
+                            classes.add(clsKey)
                             if (!activeStartByPkg.containsKey(ev.packageName)) {
                                 activeStartByPkg[ev.packageName] = ev.timestampMs
                             }
@@ -250,13 +255,10 @@ class UsageStatsTracker(private val context: Context) {
                         if (activeStartByPkg.containsKey(pkg)) {
                             val classes = activeClassesByPkg[pkg]
                             val clsKey = ev.className.ifBlank { DEFAULT_CLASS_KEY }
-                            if (classes != null && classes.containsKey(clsKey)) {
-                                val nextCount = (classes[clsKey] ?: 1) - 1
-                                if (nextCount <= 0) {
-                                    classes.remove(clsKey)
-                                } else {
-                                    classes[clsKey] = nextCount
-                                }
+                            if (ev.eventType == EVENT_ACTIVITY_PAUSED && ev.className.isBlank()) {
+                                // Certains appareils OEM omettent className sur ACTIVITY_PAUSED
+                                closePackage(pkg, ev.timestampMs)
+                            } else if (classes != null && classes.remove(clsKey)) {
                                 if (classes.isEmpty()) {
                                     closePackage(pkg, ev.timestampMs)
                                 }

@@ -32,8 +32,11 @@ class DemoBotEngine(
         resetDefaultDemoDuels()
     }
 
+    @Synchronized
     fun resetDefaultDemoDuels() {
         duels.clear()
+        simulatedAnkiBonusSeconds = 0L
+        simulatedSocialBonusSeconds = 0L
         val today = LocalDate.now().toString()
         val now = System.currentTimeMillis()
 
@@ -130,18 +133,22 @@ class DemoBotEngine(
         duels.add(duel2)
     }
 
+    @Synchronized
     fun addSimulatedAnkiMinutes(minutes: Int) {
         simulatedAnkiBonusSeconds = (simulatedAnkiBonusSeconds + minutes * 60L).coerceAtLeast(0L)
     }
 
+    @Synchronized
     fun addSimulatedSocialMinutes(minutes: Int) {
         simulatedSocialBonusSeconds = (simulatedSocialBonusSeconds + minutes * 60L).coerceAtLeast(0L)
     }
 
+    @Synchronized
     fun syncSnapshot(snapshot: UsageSnapshot): List<DuelState> {
         val now = System.currentTimeMillis()
         for (i in duels.indices) {
             val duel = duels[i]
+            if (duel.status != DuelStatus.ACTIVE) continue
             val missingMandatory = duel.config.mandatorySocialPackages - snapshot.trackedSocialPackages
             val healthy = snapshot.permissionsHealthy && missingMandatory.isEmpty()
 
@@ -164,6 +171,7 @@ class DemoBotEngine(
         return duels.toList()
     }
 
+    @Synchronized
     fun createDuel(config: DuelConfig): DuelState {
         val now = System.currentTimeMillis()
         val duel = DuelDeltaCalculator.recalculateDuel(
@@ -176,13 +184,19 @@ class DemoBotEngine(
                 cycleKey = LocalDate.now().toString(),
                 referenceScoreSeconds = 0L,
                 participants = listOf(
-                    ParticipantState(userId = userId, username = username, lastSyncEpochMs = now),
+                    ParticipantState(
+                        userId = userId,
+                        username = username,
+                        jokersRemainingThisWeek = config.jokersPerWeek,
+                        lastSyncEpochMs = now
+                    ),
                     ParticipantState(
                         userId = "bot-rival-${(1..99).random()}",
                         username = "Rival (Bot)",
                         ankiEffectiveSeconds = 18 * 60L,
                         socialSeconds = 2 * 60L,
                         cardsReviewed = 35,
+                        jokersRemainingThisWeek = config.jokersPerWeek,
                         lastSyncEpochMs = now,
                         ankiApiConnected = true
                     )
@@ -194,21 +208,27 @@ class DemoBotEngine(
         return duel
     }
 
+    @Synchronized
     fun activateJoker(duelId: String): Boolean {
         val idx = duels.indexOfFirst { it.duelId == duelId }
         if (idx < 0) return false
         val duel = duels[idx]
-        if (!duel.config.jokerEnabled) return false
+        if (duel.status != DuelStatus.ACTIVE || !duel.config.jokerEnabled) return false
         val now = System.currentTimeMillis()
 
         var activated = false
         val updated = duel.participants.map { p ->
-            if (p.userId == userId && p.jokersRemainingThisWeek > 0) {
-                activated = true
-                p.copy(
-                    jokerActiveUntilEpochMs = now + duel.config.jokerDurationMinutes * 60_000L,
-                    jokersRemainingThisWeek = p.jokersRemainingThisWeek - 1
-                )
+            if (p.userId == userId && p.status != ParticipantStatus.FORFEITED) {
+                if (p.jokerActiveUntilEpochMs > now) {
+                    activated = true
+                    p
+                } else if (p.jokersRemainingThisWeek > 0) {
+                    activated = true
+                    p.copy(
+                        jokerActiveUntilEpochMs = now + duel.config.jokerDurationMinutes * 60_000L,
+                        jokersRemainingThisWeek = p.jokersRemainingThisWeek - 1
+                    )
+                } else p
             } else p
         }
         if (activated) {
@@ -217,6 +237,7 @@ class DemoBotEngine(
         return activated
     }
 
+    @Synchronized
     fun forfeitDuel(duelId: String): DuelState? {
         val idx = duels.indexOfFirst { it.duelId == duelId }
         if (idx < 0) return null
@@ -231,5 +252,6 @@ class DemoBotEngine(
         return recalculated
     }
 
+    @Synchronized
     fun listDuels(): List<DuelState> = duels.toList()
 }

@@ -260,8 +260,8 @@ fun AppsSettingsScreen(
 
             // ── Apps List ─────────────────────────────────────────────────────
             items(filtered, key = { it.packageName }) { app ->
-                val checked = app.packageName in trackedPackages
                 val mandatory = app.packageName in mandatoryPackages
+                val checked = app.packageName in trackedPackages || mandatory
                 val toggleable = !hasActiveDuel && !mandatory
 
                 ObsidianCard(

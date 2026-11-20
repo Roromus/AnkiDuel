@@ -18,7 +18,10 @@ class DuelHub(
     }
 
     fun unregister(userId: String, session: DefaultWebSocketSession) {
-        sessionsByUser[userId]?.remove(session)
+        sessionsByUser.computeIfPresent(userId) { _, set ->
+            set.remove(session)
+            if (set.isEmpty()) null else set
+        }
     }
 
     suspend fun broadcastToUsers(userIds: Collection<String>, event: ServerEvent) {
@@ -29,7 +32,7 @@ class DuelHub(
                 runCatching {
                     session.send(Frame.Text(payload))
                 }.onFailure {
-                    sessions.remove(session)
+                    unregister(userId, session)
                 }
             }
         }

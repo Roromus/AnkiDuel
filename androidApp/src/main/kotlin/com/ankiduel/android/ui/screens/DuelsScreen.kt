@@ -54,6 +54,7 @@ import com.ankiduel.android.ui.components.ObsidianTextField
 import com.ankiduel.android.ui.components.PlayerAvatar
 import com.ankiduel.android.ui.components.StatusPill
 import com.ankiduel.android.ui.components.formatCompactMinutes
+import com.ankiduel.android.ui.theme.AmberJokerSoft
 import com.ankiduel.android.ui.theme.AnkiBlue
 import com.ankiduel.android.ui.theme.AnkiBlueSoft
 import com.ankiduel.android.ui.theme.HairlineBorder
@@ -69,6 +70,7 @@ import com.ankiduel.android.ui.theme.TextSecondary
 import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.DuelStatus
+import com.ankiduel.shared.model.ParticipantStatus
 import com.ankiduel.shared.model.ReferenceMode
 
 @Composable
@@ -220,7 +222,10 @@ fun DuelsScreen(
                 ) {
                     items(duels, key = { it.duelId }) { duel ->
                         val me = duel.participants.firstOrNull { it.userId == userId }
-                        val leader = duel.participants.maxByOrNull { it.netScoreSeconds }
+                        val leader = duel.participants
+                            .filter { it.status != ParticipantStatus.FORFEITED }
+                            .maxByOrNull { it.netScoreSeconds }
+                            ?: duel.participants.maxByOrNull { it.netScoreSeconds }
                         val debt = me?.debtMinutes ?: 0
                         val modeLabel = if (duel.config.referenceMode == ReferenceMode.LEADER) "Leader" else "Moyenne"
 
@@ -309,14 +314,17 @@ fun DuelsScreen(
                                 }
 
                                 val isCompleted = duel.status == DuelStatus.COMPLETED || duel.status == DuelStatus.CANCELLED
+                                val isWaiting = duel.status == DuelStatus.WAITING
                                 StatusPill(
                                     text = when {
                                         isCompleted -> "Terminé"
+                                        isWaiting -> "En attente"
                                         debt > 0 -> "Dette $debt min"
                                         else -> "À jour"
                                     },
                                     color = when {
                                         isCompleted -> TextMuted
+                                        isWaiting -> AmberJokerSoft
                                         debt > 0 -> SocialCoralSoft
                                         else -> SafeEmeraldSoft
                                     }

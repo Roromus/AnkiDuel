@@ -83,14 +83,19 @@ class AppUpdateManager(
             if (!force && now - lastCheckMs < CHECK_INTERVAL_MS) {
                 return
             }
-            lastCheckMs = now
 
             _state.value = UpdateState.Checking
 
             val release = withContext(Dispatchers.IO) {
                 runCatching { fetchLatestRelease() }.getOrNull()
             }
-            if (release == null || release.draft || release.prerelease) {
+            if (release == null) {
+                // Ne pas figer lastCheckMs si la requête réseau a échoué afin de réessayer au prochain resume
+                _state.value = UpdateState.Idle
+                return
+            }
+            lastCheckMs = now
+            if (release.draft || release.prerelease) {
                 _state.value = UpdateState.Idle
                 return
             }
@@ -166,6 +171,14 @@ class AppUpdateManager(
 
     fun onResumeCheckPermission() {
         val current = _state.value as? UpdateState.ReadyToInstall ?: return
+        if (getCurrentVersionCode() >= current.versionCode) {
+            _state.value = UpdateState.Idle
+            return
+        }
+        if (!current.apkFile.exists()) {
+            _state.value = UpdateState.Idle
+            return
+        }
         val canInstall = canRequestPackageInstalls()
         if (current.needsInstallPermission && canInstall) {
             _state.value = current.copy(needsInstallPermission = false)
@@ -173,6 +186,8 @@ class AppUpdateManager(
                 autoTriggeredVersionCode = current.versionCode
                 launchInstaller(current.apkFile)
             }
+        } else if (!current.needsInstallPermission && !canInstall) {
+            _state.value = current.copy(needsInstallPermission = true)
         }
     }
 
@@ -192,22 +207,27 @@ class AppUpdateManager(
             ).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(intent)
+            runCatching { context.startActivity(intent) }
         }
     }
 
     fun launchInstaller(apkFile: File) {
-        if (!apkFile.exists()) return
-        val apkUri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            apkFile
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(apkUri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!apkFile.exists()) {
+            _state.value = UpdateState.Idle
+            return
         }
-        context.startActivity(intent)
+        runCatching {
+            val apkUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                apkFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        }
     }
 
     fun dismissPrompt() {
@@ -215,7 +235,15 @@ class AppUpdateManager(
     }
 
     private fun getCurrentVersionCode(): Long {
-        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getPackageInfo(
+                context.packageName,
+                android.content.pm.PackageManager.PackageInfoFlags.of(0)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0)
+        }
         return PackageInfoCompat.getLongVersionCode(info)
     }
 
@@ -259,17 +287,17 @@ class AppUpdateManager(
                 val code = conn.responseCode
                 if (code in listOf(301, 302, 303, 307, 308)) {
                     val location = conn.getHeaderField("Location") ?: return false
-                    currentUrl = location
+                    currentUrl = URL(URL(currentUrl), location).toString()
                     redirects++
                     continue
                 }
                 if (code !in 200..299) return false
 
                 val totalBytes = conn.contentLengthLong.takeIf { it > 0L } ?: expectedSize
+                var downloaded = 0L
                 conn.inputStream.use { input ->
                     FileOutputStream(tempFile).use { output ->
                         val buffer = ByteArray(16 * 1024)
-                        var downloaded = 0L
                         var lastReported = -1
                         while (true) {
                             val read = input.read(buffer)
@@ -288,6 +316,11 @@ class AppUpdateManager(
                             }
                         }
                     }
+                }
+
+                if (downloaded <= 0L || (totalBytes > 0L && downloaded != totalBytes)) {
+                    tempFile.delete()
+                    return false
                 }
 
                 if (targetFile.exists()) targetFile.delete()

@@ -91,6 +91,16 @@ fun PermissionsScreen(
         ActivityResultContracts.RequestPermission()
     ) { onRefresh() }
 
+    fun startActivitySafely(intent: Intent, fallback: Intent? = null) {
+        val appDetailsFallback = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:${context.packageName}")
+        )
+        runCatching { context.startActivity(intent) }
+            .recoverCatching { if (fallback != null) context.startActivity(fallback) else throw it }
+            .onFailure { runCatching { context.startActivity(appDetailsFallback) } }
+    }
+
     val essentialGranted = listOf(
         health.usageAccessGranted,
         health.accessibilityGranted,
@@ -187,7 +197,7 @@ fun PermissionsScreen(
                     required = true,
                     actionLabel = "Autoriser",
                     onClick = {
-                        context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        startActivitySafely(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                     }
                 )
 
@@ -199,7 +209,7 @@ fun PermissionsScreen(
                     required = true,
                     actionLabel = "Activer",
                     onClick = {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        startActivitySafely(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
                 )
 
@@ -215,7 +225,10 @@ fun PermissionsScreen(
                             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                             Uri.parse("package:${context.packageName}")
                         )
-                        context.startActivity(intent)
+                        startActivitySafely(
+                            intent,
+                            fallback = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                        )
                     }
                 )
 
@@ -241,26 +254,41 @@ fun PermissionsScreen(
                     )
                 }
 
+                val ankiProviderDisabled = health.ankiDroidApiGranted &&
+                    diagnostics.ankiApiSnapshot.status == AnkiApiStatus.PROVIDER_UNAVAILABLE
                 PermissionCard(
                     icon = Icons.Rounded.School,
                     title = "API AnkiDroid (Anti-triche)",
                     description = when {
                         !health.ankiDroidInstalled ->
                             "AnkiDroid non détecté sur cet appareil (optionnel en mode Démo)."
-                        health.ankiDroidApiGranted && diagnostics.ankiApiSnapshot.status == AnkiApiStatus.PROVIDER_UNAVAILABLE ->
+                        ankiProviderDisabled ->
                             "Permission accordée, mais l'API est désactivée dans AnkiDroid (Paramètres > Avancé > Activer l'API AnkiDroid)."
                         else ->
                             "Vérifie le nombre de cartes réellement révisées pour empêcher l'inactivité."
                     },
-                    granted = health.ankiDroidApiGranted,
+                    granted = health.ankiDroidApiGranted && !ankiProviderDisabled,
                     required = false,
-                    actionLabel = "Connecter",
+                    actionLabel = when {
+                        !health.ankiDroidInstalled -> "Non installé"
+                        ankiProviderDisabled -> "Ouvrir Anki"
+                        else -> "Connecter"
+                    },
+                    actionEnabled = health.ankiDroidInstalled,
                     onClick = {
-                        val perm = health.ankiDroidPackage
-                            ?.takeIf { it != com.ankiduel.shared.model.SocialAppCatalog.ANKIDROID_PACKAGE }
-                            ?.let { "$it.permission.READ_WRITE_DATABASE" }
-                            ?: AnkiDroidTracker.ANKI_READ_WRITE_PERMISSION
-                        ankiApiLauncher.launch(perm)
+                        if (ankiProviderDisabled) {
+                            val pkg = health.ankiDroidPackage
+                            val launch = pkg?.let { context.packageManager.getLaunchIntentForPackage(it) }
+                            if (launch != null) {
+                                startActivitySafely(launch)
+                            }
+                        } else if (health.ankiDroidInstalled) {
+                            val perm = health.ankiDroidPackage
+                                ?.takeIf { it != com.ankiduel.shared.model.SocialAppCatalog.ANKIDROID_PACKAGE }
+                                ?.let { "$it.permission.READ_WRITE_DATABASE" }
+                                ?: AnkiDroidTracker.ANKI_READ_WRITE_PERMISSION
+                            ankiApiLauncher.launch(perm)
+                        }
                     }
                 )
 
@@ -277,8 +305,7 @@ fun PermissionsScreen(
                             Uri.parse("package:${context.packageName}")
                         )
                         val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                        runCatching { context.startActivity(directIntent) }
-                            .onFailure { context.startActivity(fallbackIntent) }
+                        startActivitySafely(directIntent, fallback = fallbackIntent)
                     }
                 )
 
@@ -357,6 +384,7 @@ private fun PermissionCard(
     granted: Boolean,
     required: Boolean,
     actionLabel: String,
+    actionEnabled: Boolean = true,
     onClick: () -> Unit
 ) {
     val accent = when {
@@ -418,6 +446,7 @@ private fun PermissionCard(
             } else {
                 Button(
                     onClick = onClick,
+                    enabled = actionEnabled,
                     shape = RoundedCornerShape(11.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = AnkiBlue.copy(alpha = 0.16f),

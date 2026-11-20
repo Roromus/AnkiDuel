@@ -98,4 +98,41 @@ class UsageStatsTrackerTest {
         assertEquals(null, result[SocialAppCatalog.ANKIDROID_PACKAGE])
         assertEquals(60L, result["com.instagram.android"])
     }
+
+    @Test
+    fun `does not leak session when duplicate RESUMED events fire for the same activity class`() {
+        val t0 = 2_000_000L
+        val events = listOf(
+            ForegroundEvent(SocialAppCatalog.ANKIDROID_PACKAGE, 1, t0, "com.ichi2.anki.Reviewer"),
+            ForegroundEvent(SocialAppCatalog.ANKIDROID_PACKAGE, 1, t0 + 10_000L, "com.ichi2.anki.Reviewer"),
+            ForegroundEvent(SocialAppCatalog.ANKIDROID_PACKAGE, 2, t0 + 60_000L, "com.ichi2.anki.Reviewer")
+        )
+
+        val result = UsageStatsTracker.computeForegroundSecondsFromEvents(
+            events = events,
+            targetPackages = setOf(SocialAppCatalog.ANKIDROID_PACKAGE),
+            windowStartMs = t0,
+            windowEndMs = t0 + 300_000L
+        )
+
+        assertEquals(60L, result[SocialAppCatalog.ANKIDROID_PACKAGE])
+    }
+
+    @Test
+    fun `closes package cleanly when PAUSED event omits className`() {
+        val t0 = 3_000_000L
+        val events = listOf(
+            ForegroundEvent(SocialAppCatalog.ANKIDROID_PACKAGE, 1, t0, "com.ichi2.anki.Reviewer"),
+            ForegroundEvent(SocialAppCatalog.ANKIDROID_PACKAGE, 2, t0 + 120_000L, "")
+        )
+
+        val result = UsageStatsTracker.computeForegroundSecondsFromEvents(
+            events = events,
+            targetPackages = setOf(SocialAppCatalog.ANKIDROID_PACKAGE),
+            windowStartMs = t0,
+            windowEndMs = t0 + 600_000L
+        )
+
+        assertEquals(120L, result[SocialAppCatalog.ANKIDROID_PACKAGE])
+    }
 }

@@ -47,7 +47,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,6 +76,7 @@ import com.ankiduel.android.ui.theme.TabularFeatures
 import com.ankiduel.android.ui.theme.TextMuted
 import com.ankiduel.android.ui.theme.TextPrimary
 import com.ankiduel.android.ui.theme.TextSecondary
+import com.ankiduel.shared.model.ParticipantStatus
 import com.ankiduel.shared.model.SocialAppCatalog
 import kotlinx.coroutines.launch
 
@@ -81,6 +85,8 @@ class LockOverlayActivity : ComponentActivity() {
     companion object {
         const val EXTRA_BLOCKED_PACKAGE = "blocked_package"
     }
+
+    private var blockedPackageState by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,7 +105,7 @@ class LockOverlayActivity : ComponentActivity() {
             }
         )
 
-        val blockedPkg = intent.getStringExtra(EXTRA_BLOCKED_PACKAGE)
+        blockedPackageState = intent.getStringExtra(EXTRA_BLOCKED_PACKAGE)
             ?: BlockStateHolder.lastBlockedPackage.value.orEmpty()
 
         val appContainer = (application as AnkiDuelApplication).container
@@ -107,33 +113,76 @@ class LockOverlayActivity : ComponentActivity() {
         setContent {
             AnkiDuelTheme {
                 val lockStatus by BlockStateHolder.lockStatus.collectAsState()
+                val duels by appContainer.repository.duels.collectAsState()
+                val session by appContainer.repository.session.collectAsState()
                 val scope = rememberCoroutineScope()
+                var jokerBusy by remember { mutableStateOf(false) }
+                var jokerError by remember { mutableStateOf<String?>(null) }
 
-                LaunchedEffect(lockStatus.isLocked) {
-                    if (!lockStatus.isLocked) {
+                val now = System.currentTimeMillis()
+                val effectivelyLocked = (lockStatus.isLocked || lockStatus.maxDebtSeconds > 0L) &&
+                    lockStatus.jokerActiveUntilEpochMs <= now
+
+                LaunchedEffect(effectivelyLocked) {
+                    if (!effectivelyLocked) {
                         finish()
                     }
                 }
 
+                val blockingDuel = duels.firstOrNull { it.duelId == lockStatus.blockingDuelId }
+                val currentUserId = session?.userId.orEmpty()
+                val me = blockingDuel?.participants?.firstOrNull { it.userId == currentUserId }
+                val canUseJoker = lockStatus.blockingDuelId != null && (
+                    blockingDuel == null || (
+                        blockingDuel.config.jokerEnabled &&
+                            me?.status != ParticipantStatus.FORFEITED &&
+                            (me?.jokersRemainingThisWeek ?: 0) > 0
+                        )
+                    )
+                val jokerDurationMinutes = blockingDuel?.config?.jokerDurationMinutes ?: 5
+
                 LockScreenContent(
-                    blockedAppName = SocialAppCatalog.displayNameFor(blockedPkg),
+                    blockedAppName = SocialAppCatalog.displayNameFor(blockedPackageState.ifBlank { "Application" }),
                     debtMinutes = lockStatus.maxDebtMinutes,
                     duelTitle = lockStatus.blockingDuelTitle ?: "Duel AnkiDuel",
                     leaderName = lockStatus.leaderUsername ?: "Votre adversaire",
-                    canUseJoker = lockStatus.blockingDuelId != null,
+                    canUseJoker = canUseJoker,
+                    jokerDurationMinutes = jokerDurationMinutes,
+                    jokerBusy = jokerBusy,
+                    jokerError = jokerError,
                     onOpenAnkiDroid = { openAnkiDroid() },
                     onActivateJoker = {
                         val duelId = lockStatus.blockingDuelId ?: return@LockScreenContent
+                        if (jokerBusy) return@LockScreenContent
+                        jokerBusy = true
+                        jokerError = null
                         scope.launch {
-                            val activated = appContainer.repository.activateJoker(duelId)
-                            if (activated) {
-                                finish()
+                            val result = runCatching { appContainer.repository.activateJoker(duelId) }
+                            jokerBusy = false
+                            result.onSuccess { activated ->
+                                if (activated) {
+                                    finish()
+                                } else {
+                                    jokerError = "Aucun joker disponible cette semaine."
+                                }
+                            }.onFailure { err ->
+                                jokerError = err.message ?: "Impossible d'activer le joker."
                             }
                         }
                     },
                     onGoHome = { goHome() }
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val pkg = intent.getStringExtra(EXTRA_BLOCKED_PACKAGE)
+            ?: BlockStateHolder.lastBlockedPackage.value.orEmpty()
+        if (pkg.isNotBlank()) {
+            blockedPackageState = pkg
         }
     }
 
@@ -166,6 +215,9 @@ internal fun LockScreenContent(
     duelTitle: String,
     leaderName: String,
     canUseJoker: Boolean,
+    jokerDurationMinutes: Int = 5,
+    jokerBusy: Boolean = false,
+    jokerError: String? = null,
     onOpenAnkiDroid: () -> Unit,
     onActivateJoker: () -> Unit,
     onGoHome: () -> Unit
@@ -334,6 +386,7 @@ internal fun LockScreenContent(
                 if (canUseJoker) {
                     OutlinedButton(
                         onClick = onActivateJoker,
+                        enabled = !jokerBusy,
                         shape = RoundedCornerShape(14.dp),
                         border = BorderStroke(1.dp, AmberJoker.copy(alpha = 0.42f)),
                         colors = ButtonDefaults.outlinedButtonColors(
@@ -351,10 +404,19 @@ internal fun LockScreenContent(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "Joker d'urgence (5 min)",
+                            text = if (jokerBusy) "Activation du joker…" else "Joker d'urgence ($jokerDurationMinutes min)",
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
+                }
+
+                if (!jokerError.isNullOrBlank()) {
+                    Text(
+                        text = jokerError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SocialCoralSoft,
+                        textAlign = TextAlign.Center
+                    )
                 }
 
                 TextButton(

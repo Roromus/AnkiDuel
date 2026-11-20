@@ -41,8 +41,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,9 +82,11 @@ import com.ankiduel.android.ui.theme.TextSecondary
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.DuelStatus
 import com.ankiduel.shared.model.GlobalLockStatus
+import com.ankiduel.shared.model.ParticipantStatus
 import com.ankiduel.shared.model.ReferenceMode
 import com.ankiduel.shared.model.SocialAppCatalog
 import com.ankiduel.shared.model.UsageSnapshot
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -98,22 +104,46 @@ fun DashboardScreen(
     onDuelClick: (String) -> Unit,
     onActivateJoker: (String) -> Unit,
     onAddDemoAnki: (Int) -> Unit,
-    onAddDemoSocial: (Int) -> Unit
+    onAddDemoSocial: (Int) -> Unit,
+    onMessage: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val refreshRotation = remember { Animatable(0f) }
 
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lockStatus.jokerActiveUntilEpochMs) {
+        nowMs = System.currentTimeMillis()
+        if (lockStatus.jokerActiveUntilEpochMs > nowMs) {
+            while (nowMs < lockStatus.jokerActiveUntilEpochMs) {
+                delay(1_000L)
+                nowMs = System.currentTimeMillis()
+            }
+            onRefresh()
+        }
+    }
+
     val ankiMin = (usage.ankiEffectiveSeconds / 60L).toInt()
     val socialMin = (usage.socialForegroundSeconds / 60L).toInt()
     val netMin = ankiMin - socialMin
 
-    val isLocked = lockStatus.isLocked
-    val nowMs = System.currentTimeMillis()
     val jokerActive = lockStatus.jokerActiveUntilEpochMs > nowMs
+    val isLocked = (lockStatus.isLocked || lockStatus.maxDebtSeconds > 0L) && !jokerActive
     val jokerRemainingMin = if (jokerActive) {
         (((lockStatus.jokerActiveUntilEpochMs - nowMs) + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
     } else 0
+
+    val blockingDuel = remember(duels, lockStatus.blockingDuelId) {
+        duels.firstOrNull { it.duelId == lockStatus.blockingDuelId }
+    }
+    val canActivateBlockingJoker = remember(blockingDuel, userId, jokerActive) {
+        if (jokerActive || blockingDuel == null || !blockingDuel.config.jokerEnabled) {
+            false
+        } else {
+            val me = blockingDuel.participants.firstOrNull { it.userId == userId }
+            me != null && me.status != ParticipantStatus.FORFEITED && me.jokersRemainingThisWeek > 0
+        }
+    }
 
     val statusAccent = when {
         isLocked -> SocialCoral
@@ -324,7 +354,13 @@ fun DashboardScreen(
                                             .firstNotNullOfOrNull { pkg ->
                                                 context.packageManager.getLaunchIntentForPackage(pkg)
                                             }
-                                        if (ankiIntent != null) context.startActivity(ankiIntent)
+                                        if (ankiIntent != null) {
+                                            ankiIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            runCatching { context.startActivity(ankiIntent) }
+                                                .onFailure { onMessage("Impossible d'ouvrir AnkiDroid.") }
+                                        } else {
+                                            onMessage("AnkiDroid n'est pas installé sur cet appareil.")
+                                        }
                                     },
                                     shape = RoundedCornerShape(14.dp),
                                     colors = ButtonDefaults.buttonColors(
@@ -348,26 +384,28 @@ fun DashboardScreen(
                                     )
                                 }
 
-                                lockStatus.blockingDuelId?.let { duelId ->
-                                    OutlinedButton(
-                                        onClick = { onActivateJoker(duelId) },
-                                        shape = RoundedCornerShape(14.dp),
-                                        border = BorderStroke(1.dp, AmberJoker.copy(alpha = 0.45f)),
-                                        contentPadding = PaddingValues(horizontal = 16.dp),
-                                        modifier = Modifier.height(48.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Bolt,
-                                            contentDescription = null,
-                                            tint = AmberJokerSoft,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            text = "Joker",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = AmberJokerSoft
-                                        )
+                                if (canActivateBlockingJoker) {
+                                    lockStatus.blockingDuelId?.let { duelId ->
+                                        OutlinedButton(
+                                            onClick = { onActivateJoker(duelId) },
+                                            shape = RoundedCornerShape(14.dp),
+                                            border = BorderStroke(1.dp, AmberJoker.copy(alpha = 0.45f)),
+                                            contentPadding = PaddingValues(horizontal = 16.dp),
+                                            modifier = Modifier.height(48.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Bolt,
+                                                contentDescription = null,
+                                                tint = AmberJokerSoft,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(
+                                                text = "Joker",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = AmberJokerSoft
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -563,6 +601,7 @@ fun DashboardScreen(
                                 )
                                 topEntries.forEach { (pkg, sec) ->
                                     val mins = (sec / 60L).toInt()
+                                    val durationLabel = if (sec < 60L) "< 1 min" else formatCompactMinutes(mins)
                                     val fraction = (sec.toFloat() / maxSec).coerceIn(0.08f, 1f)
                                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                         Row(
@@ -577,7 +616,7 @@ fun DashboardScreen(
                                                 fontWeight = FontWeight.Medium
                                             )
                                             Text(
-                                                text = formatCompactMinutes(mins),
+                                                text = durationLabel,
                                                 style = MaterialTheme.typography.labelMedium.copy(
                                                     fontFeatureSettings = TabularFeatures
                                                 ),
@@ -611,7 +650,7 @@ fun DashboardScreen(
             item(key = "duels_header") {
                 Spacer(Modifier.height(2.dp))
                 SectionHeader(
-                    title = "Duels actifs",
+                    title = "Mes duels",
                     trailing = {
                         StatusPill(
                             text = "${duels.size}",
@@ -704,14 +743,17 @@ fun DashboardScreen(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 val isCompleted = duel.status == DuelStatus.COMPLETED || duel.status == DuelStatus.CANCELLED
+                                val isWaiting = duel.status == DuelStatus.WAITING
                                 StatusPill(
                                     text = when {
                                         isCompleted -> "Terminé"
+                                        isWaiting -> "En attente"
                                         debt > 0 -> "-$debt min"
                                         else -> "À jour"
                                     },
                                     color = when {
                                         isCompleted -> TextMuted
+                                        isWaiting -> AmberJokerSoft
                                         debt > 0 -> SocialCoralSoft
                                         else -> SafeEmeraldSoft
                                     }
@@ -789,7 +831,7 @@ fun DashboardScreen(
                             }
                         }
 
-                        if (lockStatus.isLocked) {
+                        if (isLocked) {
                             Spacer(Modifier.height(10.dp))
                             OutlinedButton(
                                 onClick = {

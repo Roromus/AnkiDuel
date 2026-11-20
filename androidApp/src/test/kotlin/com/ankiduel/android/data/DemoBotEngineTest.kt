@@ -39,4 +39,30 @@ class DemoBotEngineTest {
         assertFalse(lockAfter.isLocked)
         assertEquals(0, lockAfter.maxDebtMinutes)
     }
+
+    @Test
+    fun `reset clears simulated bonuses and joker activation is idempotent while active`() {
+        val engine = DemoBotEngine(userId = "me", username = "Moi")
+        engine.addSimulatedAnkiMinutes(15)
+        engine.addSimulatedSocialMinutes(10)
+        assertEquals(900L, engine.simulatedAnkiBonusSeconds)
+        assertEquals(600L, engine.simulatedSocialBonusSeconds)
+
+        engine.resetDefaultDemoDuels()
+        assertEquals(0L, engine.simulatedAnkiBonusSeconds)
+        assertEquals(0L, engine.simulatedSocialBonusSeconds)
+
+        // First joker consumes 1 joker; immediate second call while still active is idempotent
+        val duel = engine.createDuel(
+            com.ankiduel.shared.model.DuelConfig(
+                title = "Test Joker",
+                jokersPerWeek = 2
+            )
+        )
+        assertTrue(engine.activateJoker(duel.duelId))
+        assertTrue(engine.activateJoker(duel.duelId))
+        val updated = engine.listDuels().first { it.duelId == duel.duelId }
+        val me = updated.participants.first { it.userId == "me" }
+        assertEquals(1, me.jokersRemainingThisWeek)
+    }
 }

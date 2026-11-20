@@ -14,10 +14,13 @@ import com.ankiduel.shared.model.DuelConfig
 import com.ankiduel.shared.model.DuelState
 import com.ankiduel.shared.model.GlobalLockStatus
 import com.ankiduel.shared.model.UsageSnapshot
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 
 class AppViewModel(
     private val repository: AnkiDuelRepository,
@@ -38,6 +41,7 @@ class AppViewModel(
 
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
+    private val activeActionsCount = AtomicInteger(0)
 
     private val _feedbackMessage = MutableStateFlow<String?>(null)
     val feedbackMessage: StateFlow<String?> = _feedbackMessage.asStateFlow()
@@ -77,8 +81,14 @@ class AppViewModel(
 
     fun loadInstalledApps() {
         viewModelScope.launch {
-            _installedApps.value = repository.listInstalledApps()
+            _installedApps.value = withContext(Dispatchers.IO) {
+                repository.listInstalledApps()
+            }
         }
+    }
+
+    fun showFeedback(message: String) {
+        _feedbackMessage.value = message
     }
 
     fun refreshAll() {
@@ -173,12 +183,19 @@ class AppViewModel(
 
     private fun launchAction(block: suspend () -> Unit) {
         viewModelScope.launch {
+            activeActionsCount.incrementAndGet()
             _isBusy.value = true
-            runCatching { block() }
-                .onFailure { err ->
-                    _feedbackMessage.value = err.message ?: "Une erreur est survenue."
+            try {
+                runCatching { block() }
+                    .onFailure { err ->
+                        _feedbackMessage.value = err.message ?: "Une erreur est survenue."
+                    }
+            } finally {
+                if (activeActionsCount.decrementAndGet() <= 0) {
+                    activeActionsCount.set(0)
+                    _isBusy.value = false
                 }
-            _isBusy.value = false
+            }
         }
     }
 

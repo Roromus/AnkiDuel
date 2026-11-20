@@ -66,4 +66,22 @@ class AntiIdleValidatorTest {
         assertEquals(840L, r3.effectiveSeconds)
         assertFalse(r3.isIdleFlagged)
     }
+
+    @Test
+    fun `keeps idle flag active on zero-delta polls and does not erase idle cap on transient API drop`() {
+        val validator = AntiIdleValidator(graceSecondsPerWindow = 180L)
+        val r1 = validator.evaluate(AntiIdleValidator.State(), rawAnkiSeconds = 600L, cardsReviewed = 0, ankiApiConnected = true)
+        assertEquals(180L, r1.effectiveSeconds)
+        assertTrue(r1.isIdleFlagged)
+
+        // Next 15s poll with no new Anki foreground time must stay flagged until cards are reviewed
+        val r2 = validator.evaluate(r1.nextState, rawAnkiSeconds = 600L, cardsReviewed = 0, ankiApiConnected = true)
+        assertEquals(180L, r2.effectiveSeconds)
+        assertTrue(r2.isIdleFlagged)
+
+        // Transient API disconnect must NOT retroactively credit the 420s of previously capped idle time
+        val r3 = validator.evaluate(r2.nextState, rawAnkiSeconds = 630L, cardsReviewed = 0, ankiApiConnected = false)
+        assertEquals(210L, r3.effectiveSeconds)
+        assertEquals(420L, r3.idleCappedSeconds)
+    }
 }

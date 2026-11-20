@@ -88,6 +88,7 @@ import com.ankiduel.android.ui.theme.SurfaceCardElevated
 import com.ankiduel.android.ui.theme.TextMuted
 import com.ankiduel.android.ui.theme.TextPrimary
 import com.ankiduel.android.update.UpdateState
+import com.ankiduel.shared.model.DuelStatus
 
 private enum class MainTab(
     val label: String,
@@ -185,6 +186,24 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
     }
 
     val isAuthenticated = currentSession.demoMode || !currentSession.userId.isNullOrBlank()
+    LaunchedEffect(isAuthenticated) {
+        if (!isAuthenticated) {
+            selectedDuelId = null
+            showPermissions = false
+            currentTab = MainTab.DASHBOARD
+        }
+    }
+
+    val mandatoryPackages = remember(duels) {
+        duels
+            .filter { it.status == DuelStatus.ACTIVE }
+            .flatMap { it.config.mandatorySocialPackages }
+            .toSet()
+    }
+    val hasActiveDuel = remember(duels) {
+        duels.any { it.status == DuelStatus.ACTIVE }
+    }
+
     val showBottomBar = isAuthenticated && !showPermissions && selectedDuelId == null
 
     val activeRoute = when {
@@ -283,7 +302,8 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                             onDuelClick = { selectedDuelId = it },
                             onActivateJoker = { viewModel.activateJoker(it) },
                             onAddDemoAnki = { viewModel.addDemoAnkiMinutes(it) },
-                            onAddDemoSocial = { viewModel.addDemoSocialMinutes(it) }
+                            onAddDemoSocial = { viewModel.addDemoSocialMinutes(it) },
+                            onMessage = { viewModel.showFeedback(it) }
                         )
                     }
 
@@ -301,14 +321,16 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                         AppsSettingsScreen(
                             installedApps = installedApps,
                             trackedPackages = currentSession.trackedSocialPackages,
-                            mandatoryPackages = viewModel.activeMandatoryPackages(),
-                            hasActiveDuel = viewModel.hasActiveDuel(),
+                            mandatoryPackages = mandatoryPackages,
+                            hasActiveDuel = hasActiveDuel,
                             userEmail = currentSession.email,
                             demoMode = currentSession.demoMode,
                             onTogglePackage = viewModel::toggleSocialPackage,
                             onOpenPermissions = { showPermissions = true },
                             onLogout = {
                                 selectedDuelId = null
+                                showPermissions = false
+                                currentTab = MainTab.DASHBOARD
                                 viewModel.logout()
                             }
                         )

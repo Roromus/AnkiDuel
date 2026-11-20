@@ -77,7 +77,12 @@ data class ParticipantState(
     val debtMinutes: Int = 0,
     val jokerActiveUntilEpochMs: Long = 0L,
     val jokersRemainingThisWeek: Int = 1,
+    val jokerWeekKey: String = "",
     val lastSyncEpochMs: Long = 0L,
+    val lastSyncDayKey: String = "",
+    val carryOverAnkiSeconds: Long = 0L,
+    val carryOverSocialSeconds: Long = 0L,
+    val carryOverCardsReviewed: Int = 0,
     val ankiApiConnected: Boolean = false
 ) {
     val ankiMinutes: Int get() = (ankiEffectiveSeconds / 60L).toInt()

@@ -111,10 +111,15 @@ fun DuelDetailScreen(
     }
 
     val sortedParticipants = remember(duel) {
-        duel.participants.sortedByDescending { it.netScoreSeconds }
+        duel.participants.sortedWith(
+            compareBy<com.ankiduel.shared.model.ParticipantState> { it.status == ParticipantStatus.FORFEITED }
+                .thenByDescending { it.netScoreSeconds }
+        )
     }
     val me = duel.participants.firstOrNull { it.userId == userId }
     val myDebt = me?.debtMinutes ?: 0
+    val nowMs = System.currentTimeMillis()
+    val myJokerActive = (me?.jokerActiveUntilEpochMs ?: 0L) > nowMs
 
     val statusLabel = when (duel.status) {
         DuelStatus.ACTIVE -> "Actif"
@@ -407,7 +412,9 @@ fun DuelDetailScreen(
             }
 
             // ── Bottom Control Dock ───────────────────────────────────────────
-            if (duel.status == DuelStatus.ACTIVE && me?.status != ParticipantStatus.FORFEITED) {
+            val canActOnDuel = (duel.status == DuelStatus.ACTIVE || duel.status == DuelStatus.WAITING) &&
+                me != null && me.status != ParticipantStatus.FORFEITED
+            if (canActOnDuel) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -421,11 +428,11 @@ fun DuelDetailScreen(
                             .padding(horizontal = 20.dp, vertical = 14.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        if (duel.config.jokerEnabled) {
+                        if (duel.status == DuelStatus.ACTIVE && duel.config.jokerEnabled) {
                             val remaining = me?.jokersRemainingThisWeek ?: 0
                             Button(
                                 onClick = { onActivateJoker(duel.duelId) },
-                                enabled = remaining > 0,
+                                enabled = remaining > 0 && !myJokerActive,
                                 shape = RoundedCornerShape(14.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = AmberJoker,
@@ -444,7 +451,7 @@ fun DuelDetailScreen(
                                 )
                                 Spacer(Modifier.width(6.dp))
                                 Text(
-                                    text = "Joker ($remaining)",
+                                    text = if (myJokerActive) "Joker actif" else "Joker ($remaining)",
                                     style = MaterialTheme.typography.labelLarge
                                 )
                             }
@@ -468,7 +475,10 @@ fun DuelDetailScreen(
                                 modifier = Modifier.size(17.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Forfait", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                text = if (duel.status == DuelStatus.WAITING) "Annuler le duel" else "Forfait",
+                                style = MaterialTheme.typography.labelLarge
+                            )
                         }
                     }
                 }

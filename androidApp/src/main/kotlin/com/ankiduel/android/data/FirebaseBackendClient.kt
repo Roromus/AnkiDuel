@@ -18,7 +18,11 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.security.SecureRandom
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.WeekFields
 import java.util.UUID
 
 data class FirebaseAuthSession(
@@ -35,9 +39,12 @@ class FirebaseBackendClient(
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+    private val secureRandom = SecureRandom()
 
     private val usersCol get() = firestore.collection("users")
     private val duelsCol get() = firestore.collection("duels")
+
+    fun currentUserId(): String? = auth.currentUser?.uid
 
     suspend fun login(email: String, password: String): FirebaseAuthSession {
         val cleanEmail = email.trim()
@@ -94,18 +101,26 @@ class FirebaseBackendClient(
     }
 
     suspend fun createDuel(userId: String, username: String, config: DuelConfig): DuelState {
+        require(config.title.trim().length in 2..50) { "Le nom du duel doit contenir entre 2 et 50 caractères." }
+        require(config.maxPlayers in 2..10) { "Un duel doit accueillir entre 2 et 10 joueurs." }
+        require(config.toleranceMinutes in 0..180) { "La tolérance doit être comprise entre 0 et 180 minutes." }
+
         val duelId = UUID.randomUUID().toString()
-        val inviteCode = generateInviteCode()
+        val inviteCode = generateUniqueInviteCode()
         val now = System.currentTimeMillis()
-        val cycleKey = computeCycleKey(config)
-        val initialStatus = if (config.maxPlayers <= 1) DuelStatus.ACTIVE else DuelStatus.WAITING
+        val todayKey = currentDayKey(now)
+        val weekKey = currentWeekKey(now)
+        val cycleKey = computeCycleKey(config, now)
+        val initialStatus = DuelStatus.WAITING
 
         val creator = ParticipantState(
             userId = userId,
             username = username,
             status = ParticipantStatus.ACTIVE,
             jokersRemainingThisWeek = config.jokersPerWeek,
-            lastSyncEpochMs = now
+            jokerWeekKey = weekKey,
+            lastSyncEpochMs = now,
+            lastSyncDayKey = todayKey
         )
 
         val duel = DuelDeltaCalculator.recalculateDuel(
@@ -153,12 +168,15 @@ class FirebaseBackendClient(
                 error("Ce duel est complet.")
             }
 
+            val now = System.currentTimeMillis()
             val joinedParticipant = ParticipantState(
                 userId = userId,
                 username = username,
                 status = ParticipantStatus.ACTIVE,
                 jokersRemainingThisWeek = current.config.jokersPerWeek,
-                lastSyncEpochMs = System.currentTimeMillis()
+                jokerWeekKey = currentWeekKey(now),
+                lastSyncEpochMs = now,
+                lastSyncDayKey = currentDayKey(now)
             )
             val updatedParticipants = current.participants + joinedParticipant
             val nextStatus = if (updatedParticipants.size >= 2) DuelStatus.ACTIVE else current.status
@@ -206,7 +224,24 @@ class FirebaseBackendClient(
                 return@runTransaction current
             }
 
-            val targetCycleKey = computeCycleKey(current.config)
+            val now = snapshot.capturedAtEpochMs.takeIf { it > 0L } ?: System.currentTimeMillis()
+            val todayKey = currentDayKey(now)
+            val weekKey = currentWeekKey(now)
+
+            // Vérifier la fin d'un duel à durée personnalisée
+            if (current.config.cycle == DuelCycle.CUSTOM_DAYS) {
+                val days = (current.config.durationDays ?: 7).coerceAtLeast(1)
+                val endMs = current.createdAtEpochMs + days * 24L * 3600L * 1000L
+                if (now >= endMs) {
+                    val completed = DuelDeltaCalculator.recalculateDuel(
+                        current.copy(status = DuelStatus.COMPLETED)
+                    )
+                    tx.set(docRef, duelToMap(completed))
+                    return@runTransaction completed
+                }
+            }
+
+            val targetCycleKey = computeCycleKey(current.config, now)
             val baseDuel = if (current.config.cycle == DuelCycle.DAILY_MIDNIGHT && current.cycleKey != targetCycleKey) {
                 current.copy(
                     cycleKey = targetCycleKey,
@@ -217,7 +252,11 @@ class FirebaseBackendClient(
                             cardsReviewed = 0,
                             netScoreSeconds = 0L,
                             debtSeconds = 0L,
-                            debtMinutes = 0
+                            debtMinutes = 0,
+                            lastSyncDayKey = todayKey,
+                            carryOverAnkiSeconds = 0L,
+                            carryOverSocialSeconds = 0L,
+                            carryOverCardsReviewed = 0
                         )
                     }
                 )
@@ -225,22 +264,67 @@ class FirebaseBackendClient(
                 current
             }
 
+            val missingMandatory = baseDuel.config.mandatorySocialPackages - snapshot.trackedSocialPackages
+            val healthy = snapshot.permissionsHealthy && missingMandatory.isEmpty()
+
             val updatedParticipants = baseDuel.participants.map { p ->
-                if (p.userId != userId || p.status == ParticipantStatus.FORFEITED) {
-                    p
+                val normalizedJoker = normalizeWeeklyJoker(p, baseDuel.config.jokersPerWeek, weekKey)
+                if (normalizedJoker.userId != userId || normalizedJoker.status == ParticipantStatus.FORFEITED) {
+                    normalizedJoker
                 } else {
-                    p.copy(
-                        ankiEffectiveSeconds = snapshot.ankiEffectiveSeconds,
-                        socialSeconds = snapshot.socialForegroundSeconds,
-                        cardsReviewed = snapshot.cardsReviewed,
-                        ankiApiConnected = snapshot.ankiApiConnected,
-                        lastSyncEpochMs = snapshot.capturedAtEpochMs,
-                        status = if (snapshot.permissionsHealthy) {
-                            ParticipantStatus.ACTIVE
-                        } else {
-                            ParticipantStatus.TAMPER_ALERT
-                        }
-                    )
+                    val isMultiDayCycle = baseDuel.config.cycle != DuelCycle.DAILY_MIDNIGHT
+                    val prevDayKey = normalizedJoker.lastSyncDayKey.ifBlank {
+                        if (normalizedJoker.lastSyncEpochMs > 0L) currentDayKey(normalizedJoker.lastSyncEpochMs) else todayKey
+                    }
+                    val rolledOver = isMultiDayCycle && prevDayKey != todayKey
+                    val carryAnki = when {
+                        !isMultiDayCycle -> 0L
+                        rolledOver -> normalizedJoker.ankiEffectiveSeconds
+                        else -> normalizedJoker.carryOverAnkiSeconds
+                    }
+                    val carrySocial = when {
+                        !isMultiDayCycle -> 0L
+                        rolledOver -> normalizedJoker.socialSeconds
+                        else -> normalizedJoker.carryOverSocialSeconds
+                    }
+                    val carryCards = when {
+                        !isMultiDayCycle -> 0
+                        rolledOver -> normalizedJoker.cardsReviewed
+                        else -> normalizedJoker.carryOverCardsReviewed
+                    }
+
+                    val todaySocial = snapshot.socialForegroundSeconds.coerceAtLeast(0L)
+                    val candidateSocial = carrySocial + todaySocial
+                    val nextSocial = if (rolledOver) candidateSocial else maxOf(normalizedJoker.socialSeconds, candidateSocial)
+
+                    if (healthy) {
+                        val todayAnki = snapshot.ankiEffectiveSeconds.coerceAtLeast(0L)
+                        val todayCards = snapshot.cardsReviewed.coerceAtLeast(0)
+                        normalizedJoker.copy(
+                            status = ParticipantStatus.ACTIVE,
+                            ankiEffectiveSeconds = carryAnki + todayAnki,
+                            socialSeconds = nextSocial,
+                            cardsReviewed = carryCards + todayCards,
+                            ankiApiConnected = snapshot.ankiApiConnected,
+                            lastSyncEpochMs = now,
+                            lastSyncDayKey = todayKey,
+                            carryOverAnkiSeconds = carryAnki,
+                            carryOverSocialSeconds = carrySocial,
+                            carryOverCardsReviewed = carryCards
+                        )
+                    } else {
+                        // Gel du score Anki en cas de révocation de permission ou d'app obligatoire manquante
+                        normalizedJoker.copy(
+                            status = ParticipantStatus.TAMPER_ALERT,
+                            socialSeconds = nextSocial,
+                            ankiApiConnected = snapshot.ankiApiConnected,
+                            lastSyncEpochMs = now,
+                            lastSyncDayKey = todayKey,
+                            carryOverAnkiSeconds = carryAnki,
+                            carryOverSocialSeconds = carrySocial,
+                            carryOverCardsReviewed = carryCards
+                        )
+                    }
                 }
             }
 
@@ -257,24 +341,47 @@ class FirebaseBackendClient(
         return firestore.runTransaction { tx ->
             val doc = tx.get(docRef)
             val current = docToDuel(doc) ?: error("Duel introuvable.")
+            if (current.status != DuelStatus.ACTIVE) {
+                error("Ce duel n'est pas actif.")
+            }
             if (!current.config.jokerEnabled) {
                 error("Le joker est désactivé sur ce duel.")
             }
+            if (current.participants.none { it.userId == userId }) {
+                error("Vous ne participez pas à ce duel.")
+            }
 
             val now = System.currentTimeMillis()
-            val updatedParticipants = current.participants.map { p ->
+            val weekKey = currentWeekKey(now)
+            var alreadyActive = false
+
+            val updatedParticipants = current.participants.map { raw ->
+                val p = normalizeWeeklyJoker(raw, current.config.jokersPerWeek, weekKey)
                 if (p.userId != userId) {
                     p
                 } else {
-                    if (p.jokersRemainingThisWeek <= 0) {
-                        error("Plus de joker disponible cette semaine.")
+                    if (p.status == ParticipantStatus.FORFEITED) {
+                        error("Impossible d'utiliser un joker après forfait.")
                     }
-                    val activeUntil = now + current.config.jokerDurationMinutes * 60_000L
-                    p.copy(
-                        jokerActiveUntilEpochMs = activeUntil,
-                        jokersRemainingThisWeek = p.jokersRemainingThisWeek - 1
-                    )
+                    if (p.jokerActiveUntilEpochMs > now) {
+                        alreadyActive = true
+                        p
+                    } else {
+                        if (p.jokersRemainingThisWeek <= 0) {
+                            error("Plus de joker disponible cette semaine.")
+                        }
+                        val activeUntil = now + current.config.jokerDurationMinutes * 60_000L
+                        p.copy(
+                            jokerActiveUntilEpochMs = activeUntil,
+                            jokersRemainingThisWeek = p.jokersRemainingThisWeek - 1,
+                            jokerWeekKey = weekKey
+                        )
+                    }
                 }
+            }
+
+            if (alreadyActive) {
+                return@runTransaction current
             }
 
             val updated = DuelDeltaCalculator.recalculateDuel(
@@ -290,11 +397,18 @@ class FirebaseBackendClient(
         return firestore.runTransaction { tx ->
             val doc = tx.get(docRef)
             val current = docToDuel(doc) ?: error("Duel introuvable.")
+            if (current.status == DuelStatus.COMPLETED || current.status == DuelStatus.CANCELLED) {
+                return@runTransaction current
+            }
             val updatedParticipants = current.participants.map { p ->
                 if (p.userId == userId) p.copy(status = ParticipantStatus.FORFEITED) else p
             }
             val activeCount = updatedParticipants.count { it.status != ParticipantStatus.FORFEITED }
-            val nextStatus = if (activeCount < 2) DuelStatus.COMPLETED else current.status
+            val nextStatus = when {
+                current.status == DuelStatus.WAITING && activeCount == 0 -> DuelStatus.CANCELLED
+                activeCount < 2 -> DuelStatus.COMPLETED
+                else -> current.status
+            }
 
             val updated = DuelDeltaCalculator.recalculateDuel(
                 current.copy(status = nextStatus, participants = updatedParticipants)
@@ -336,10 +450,13 @@ class FirebaseBackendClient(
         val referenceScore = doc.getLong("referenceScoreSeconds") ?: 0L
         val createdAt = doc.getLong("createdAtEpochMs") ?: 0L
 
+        val weekKey = currentWeekKey(System.currentTimeMillis())
         @Suppress("UNCHECKED_CAST")
         val rawParticipants = doc.get("participants") as? Map<String, String> ?: emptyMap()
         val participants = rawParticipants.values.mapNotNull { raw ->
             runCatching { json.decodeFromString<ParticipantState>(raw) }.getOrNull()
+        }.map { p ->
+            normalizeWeeklyJoker(p, config.jokersPerWeek, weekKey)
         }.sortedBy { it.userId }
 
         val rawState = DuelState(
@@ -356,14 +473,54 @@ class FirebaseBackendClient(
         return DuelDeltaCalculator.recalculateDuel(rawState)
     }
 
-    private fun computeCycleKey(config: DuelConfig): String = when (config.cycle) {
-        DuelCycle.DAILY_MIDNIGHT -> LocalDate.now().toString()
+    private fun normalizeWeeklyJoker(
+        participant: ParticipantState,
+        jokersPerWeek: Int,
+        weekKey: String
+    ): ParticipantState {
+        val effectiveWeek = participant.jokerWeekKey.ifBlank {
+            if (participant.lastSyncEpochMs > 0L) currentWeekKey(participant.lastSyncEpochMs) else weekKey
+        }
+        return if (effectiveWeek != weekKey) {
+            participant.copy(
+                jokersRemainingThisWeek = jokersPerWeek.coerceAtLeast(0),
+                jokerWeekKey = weekKey
+            )
+        } else {
+            participant
+        }
+    }
+
+    private fun currentDayKey(nowMs: Long = System.currentTimeMillis()): String =
+        Instant.ofEpochMilli(nowMs).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+
+    private fun currentWeekKey(nowMs: Long = System.currentTimeMillis()): String {
+        val date: LocalDate = Instant.ofEpochMilli(nowMs).atZone(ZoneId.systemDefault()).toLocalDate()
+        val wf = WeekFields.ISO
+        val week = date.get(wf.weekOfWeekBasedYear())
+        val year = date.get(wf.weekBasedYear())
+        return "%04d-W%02d".format(year, week)
+    }
+
+    private fun computeCycleKey(config: DuelConfig, nowMs: Long = System.currentTimeMillis()): String = when (config.cycle) {
+        DuelCycle.DAILY_MIDNIGHT -> currentDayKey(nowMs)
         DuelCycle.CONTINUOUS -> "CONTINUOUS"
         DuelCycle.CUSTOM_DAYS -> "CUSTOM_${config.durationDays ?: 7}"
     }
 
+    private suspend fun generateUniqueInviteCode(): String {
+        repeat(5) {
+            val candidate = generateInviteCode()
+            val exists = runCatching {
+                duelsCol.whereEqualTo("inviteCode", candidate).limit(1).get().await().documents.isNotEmpty()
+            }.getOrDefault(false)
+            if (!exists) return candidate
+        }
+        return generateInviteCode()
+    }
+
     private fun generateInviteCode(): String {
         val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        return (1..6).map { chars.random() }.joinToString("")
+        return (1..6).map { chars[secureRandom.nextInt(chars.length)] }.joinToString("")
     }
 }

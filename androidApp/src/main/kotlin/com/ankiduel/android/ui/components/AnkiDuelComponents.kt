@@ -499,7 +499,7 @@ fun PlayerAvatar(
         1 -> AmberJokerSoft
         2 -> Color(0xFFCBD5E1)
         3 -> Color(0xFFFB923C)
-        else -> palette[abs(name.hashCode()) % palette.size]
+        else -> palette[Math.floorMod(name.hashCode(), palette.size)]
     }
 
     val initials = remember(name) {
@@ -702,11 +702,11 @@ fun formatCompactMinutes(minutes: Int, showSign: Boolean = false): String {
         minutes < 0 -> "-"
         else -> ""
     }
-    val absMin = abs(minutes)
-    return if (absMin >= 60) {
-        val h = absMin / 60
-        val m = absMin % 60
-        if (m == 0) "$sign${h}h" else "$sign${h}h ${m}m"
+    val absMin = abs(minutes.toLong())
+    return if (absMin >= 60L) {
+        val h = absMin / 60L
+        val m = absMin % 60L
+        if (m == 0L) "$sign${h}h" else "$sign${h}h ${m}m"
     } else {
         "$sign$absMin min"
     }

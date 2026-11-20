@@ -7,9 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.ankiduel.android.AnkiDuelApplication
 import com.ankiduel.android.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -29,12 +31,30 @@ class DuelMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Initialisation du suivi AnkiDroid…"))
+        startForegroundCompat(buildNotification("Initialisation du suivi AnkiDroid…"))
         startMonitoringLoop()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (monitorJob?.isActive != true) {
+            startMonitoringLoop()
+        }
         return START_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // Obligatoire sur Android 15 (targetSdk 35) pour éviter un crash RemoteServiceException
+        // après la limite de 6 heures des services dataSync.
+        stopSelf()
+    }
+
+    private fun startForegroundCompat(notification: Notification) {
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fgsType)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -105,11 +105,13 @@ class AuthService(
     private fun verifyPassword(password: String, stored: String): Boolean {
         val parts = stored.split(":")
         if (parts.size != 2) return false
-        val decoder = Base64.getDecoder()
-        val salt = decoder.decode(parts[0])
-        val expected = decoder.decode(parts[1])
-        val actual = pbkdf2(password, salt)
-        return MessageDigest.isEqual(expected, actual)
+        return runCatching {
+            val decoder = Base64.getDecoder()
+            val salt = decoder.decode(parts[0])
+            val expected = decoder.decode(parts[1])
+            val actual = pbkdf2(password, salt)
+            MessageDigest.isEqual(expected, actual)
+        }.getOrDefault(false)
     }
 
     private fun pbkdf2(password: String, salt: ByteArray): ByteArray {

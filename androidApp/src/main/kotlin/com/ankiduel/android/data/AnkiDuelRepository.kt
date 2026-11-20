@@ -22,6 +22,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.Instant
+import java.time.ZoneId
 
 data class TrackingDiagnostics(
     val rawAnkiSeconds: Long = 0L,
@@ -43,6 +47,7 @@ class AnkiDuelRepository(
     private val permissionChecker: PermissionHealthChecker
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val syncMutex = Mutex()
     private val antiIdleValidator = AntiIdleValidator()
     private val demoBot = DemoBotEngine()
 
@@ -78,19 +83,42 @@ class AnkiDuelRepository(
     val lockStatus: StateFlow<GlobalLockStatus> = _lockStatus.asStateFlow()
 
     private var realtimeJob: Job? = null
+    private var listeningUserId: String? = null
 
     init {
         scope.launch {
+            runCatching { prefs.loadCachedLockState() }.getOrNull()?.let { (cachedStatus, cachedTracked) ->
+                _lockStatus.value = cachedStatus
+                BlockStateHolder.updateLockState(cachedStatus, cachedTracked)
+            }
+
             prefs.sessionFlow.collect { stored ->
+                if (!stored.demoMode && !stored.userId.isNullOrBlank()) {
+                    val authUid = runCatching { firebase.currentUserId() }.getOrNull()
+                    if (authUid == null || authUid != stored.userId) {
+                        realtimeJob?.cancel()
+                        listeningUserId = null
+                        _duels.value = emptyList()
+                        prefs.clearCachedLockState()
+                        prefs.resetAntiIdleState()
+                        prefs.logout()
+                        return@collect
+                    }
+                }
+
                 _session.value = stored
                 if (stored.demoMode) {
                     realtimeJob?.cancel()
+                    listeningUserId = null
                     refreshAndSync()
                 } else if (!stored.userId.isNullOrBlank()) {
-                    startRealtimeListener(stored.userId, stored.trackedSocialPackages)
+                    if (listeningUserId != stored.userId) {
+                        startRealtimeListener(stored.userId)
+                    }
                     refreshAndSync()
                 } else {
                     realtimeJob?.cancel()
+                    listeningUserId = null
                     _duels.value = emptyList()
                     updateLockStatus(emptyList(), "", stored.trackedSocialPackages)
                 }
@@ -100,22 +128,28 @@ class AnkiDuelRepository(
 
     suspend fun login(email: String, password: String) {
         val res = firebase.login(email, password)
+        prefs.resetAntiIdleState()
         prefs.saveAuth(res.userId, res.username, res.email)
     }
 
     suspend fun register(email: String, username: String, password: String) {
         val res = firebase.register(email, username, password)
+        prefs.resetAntiIdleState()
         prefs.saveAuth(res.userId, res.username, res.email)
     }
 
     suspend fun enterDemoMode() {
         demoBot.resetDefaultDemoDuels()
+        prefs.resetAntiIdleState()
         prefs.enableDemoMode("Moi")
     }
 
     suspend fun logout() {
         realtimeJob?.cancel()
+        listeningUserId = null
         firebase.logout()
+        prefs.resetAntiIdleState()
+        prefs.clearCachedLockState()
         prefs.logout()
     }
 
@@ -211,13 +245,15 @@ class AnkiDuelRepository(
         refreshAndSync()
     }
 
-    suspend fun refreshAndSync() {
+    suspend fun refreshAndSync() = syncMutex.withLock {
         val current = prefs.getSession()
         val health = refreshPermissionHealth()
         val tracked = current.trackedSocialPackages + activeMandatoryPackages()
+        val nowMs = System.currentTimeMillis()
+        val todayKey = Instant.ofEpochMilli(nowMs).atZone(ZoneId.systemDefault()).toLocalDate().toString()
 
         val rawMeasurement = if (health.usageAccessGranted) {
-            usageTracker.measureToday(tracked)
+            usageTracker.measureToday(tracked, nowMs = nowMs)
         } else {
             com.ankiduel.android.tracking.DailyUsageMeasurement(0L, 0L, emptyMap())
         }
@@ -229,17 +265,16 @@ class AnkiDuelRepository(
         val rawSocial = rawMeasurement.socialForegroundSeconds +
             if (current.demoMode) demoBot.simulatedSocialBonusSeconds else 0L
 
-        val prevIdle = prefs.loadAntiIdleState()
+        val prevIdle = prefs.loadAntiIdleState(todayKey)
         val idleResult = antiIdleValidator.evaluate(
             previous = prevIdle,
             rawAnkiSeconds = rawAnki,
             cardsReviewed = ankiApi.cardsReviewedToday,
             ankiApiConnected = ankiApi.apiConnected && !current.demoMode
         )
-        prefs.saveAntiIdleState(idleResult.nextState)
+        prefs.saveAntiIdleState(idleResult.nextState, todayKey)
         _isIdleFlagged.value = idleResult.isIdleFlagged
 
-        val nowMs = System.currentTimeMillis()
         val snapshot = UsageSnapshot(
             ankiForegroundSeconds = rawAnki,
             ankiEffectiveSeconds = idleResult.effectiveSeconds,
@@ -279,7 +314,11 @@ class AnkiDuelRepository(
         }
 
         _duels.value = updatedDuels
-        updateLockStatus(updatedDuels, current.userId.orEmpty(), tracked)
+        val finalTracked = current.trackedSocialPackages + updatedDuels
+            .filter { it.status == DuelStatus.ACTIVE }
+            .flatMap { it.config.mandatorySocialPackages }
+            .toSet()
+        updateLockStatus(updatedDuels, current.userId.orEmpty(), finalTracked)
     }
 
     private fun mergeDuel(updated: DuelState) {
@@ -303,14 +342,19 @@ class AnkiDuelRepository(
         )
         _lockStatus.value = status
         BlockStateHolder.updateLockState(status, trackedPackages)
+        scope.launch {
+            runCatching { prefs.saveCachedLockState(status, trackedPackages) }
+        }
     }
 
-    private fun startRealtimeListener(userId: String, trackedPackages: Set<String>) {
+    private fun startRealtimeListener(userId: String) {
         realtimeJob?.cancel()
+        listeningUserId = userId
         realtimeJob = scope.launch {
             firebase.observeDuels(userId).collect { latest ->
                 _duels.value = latest
-                val mergedTracked = trackedPackages + activeMandatoryPackages()
+                val baseTracked = _session.value?.trackedSocialPackages ?: emptySet()
+                val mergedTracked = baseTracked + activeMandatoryPackages()
                 updateLockStatus(latest, userId, mergedTracked)
             }
         }

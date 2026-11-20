@@ -52,15 +52,16 @@ class AntiIdleValidator(
         }
 
         if (!ankiApiConnected) {
+            val newEffective = (previous.accumulatedEffectiveSeconds + rawDelta).coerceAtMost(safeRaw)
             val next = State(
                 lastRawAnkiSeconds = safeRaw,
                 lastCardsReviewed = safeCards,
                 secondsSinceLastReview = 0L,
-                accumulatedEffectiveSeconds = safeRaw
+                accumulatedEffectiveSeconds = newEffective
             )
             return Result(
-                effectiveSeconds = safeRaw,
-                idleCappedSeconds = 0L,
+                effectiveSeconds = newEffective,
+                idleCappedSeconds = (safeRaw - newEffective).coerceAtLeast(0L),
                 isIdleFlagged = false,
                 nextState = next
             )
@@ -73,13 +74,14 @@ class AntiIdleValidator(
         }
         val creditedDelta = min(rawDelta, remainingGrace)
         val newEffective = previous.accumulatedEffectiveSeconds + creditedDelta
-        val isIdle = rawDelta > remainingGrace
+        val exceededGrace = rawDelta > remainingGrace
         val newWindowSeconds = when {
             cardsDelta <= 0 -> previous.secondsSinceLastReview + rawDelta
-            isIdle -> graceSecondsPerWindow
+            exceededGrace -> graceSecondsPerWindow
             rawDelta <= graceSecondsPerWindow -> rawDelta
             else -> (rawDelta / cardsDelta).coerceAtMost(graceSecondsPerWindow)
         }
+        val isIdle = exceededGrace || (cardsDelta <= 0 && newWindowSeconds > graceSecondsPerWindow)
 
         val next = State(
             lastRawAnkiSeconds = safeRaw,

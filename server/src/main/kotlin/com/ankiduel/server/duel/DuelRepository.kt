@@ -55,9 +55,9 @@ class DuelRepository(
         val now = nowProvider()
         val dayKey = currentDayKey()
         val weekKey = currentWeekKey()
-        val inviteCode = generateInviteCode()
 
         transaction(db) {
+            val inviteCode = generateUniqueInviteCode()
             DuelsTable.insert {
                 it[id] = duelId
                 it[DuelsTable.inviteCode] = inviteCode
@@ -216,6 +216,9 @@ class DuelRepository(
 
     fun syncUsage(duelId: String, userId: String, snapshot: UsageSnapshot): SyncResult {
         val currentDuel = getDuel(duelId) ?: throw NoSuchElementException("Duel introuvable.")
+        if (currentDuel.status != DuelStatus.ACTIVE) {
+            throw IllegalStateException("Ce duel n'est pas actif.")
+        }
         val existingParticipant = currentDuel.participants.firstOrNull { it.userId == userId }
             ?: throw IllegalAccessException("Vous ne participez pas à ce duel.")
 
@@ -274,6 +277,9 @@ class DuelRepository(
 
     fun activateJoker(duelId: String, userId: String): Pair<DuelState, Long> {
         val duel = getDuel(duelId) ?: throw NoSuchElementException("Duel introuvable.")
+        if (duel.status != DuelStatus.ACTIVE) {
+            throw IllegalStateException("Ce duel n'est pas actif.")
+        }
         if (!duel.config.jokerEnabled) {
             throw IllegalStateException("Les jokers d'urgence sont désactivés pour ce duel.")
         }
@@ -336,6 +342,17 @@ class DuelRepository(
             }
         }
         return getDuel(duelId)!!
+    }
+
+    private fun generateUniqueInviteCode(): String {
+        repeat(10) {
+            val candidate = generateInviteCode()
+            val exists = DuelsTable.selectAll()
+                .where { DuelsTable.inviteCode eq candidate }
+                .any()
+            if (!exists) return candidate
+        }
+        return generateInviteCode()
     }
 
     private fun generateInviteCode(): String {

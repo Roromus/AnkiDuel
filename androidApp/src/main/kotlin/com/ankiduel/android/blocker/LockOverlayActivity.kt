@@ -138,7 +138,8 @@ class LockOverlayActivity : ComponentActivity() {
     }
 
     private fun openAnkiDroid() {
-        val ankiIntent = packageManager.getLaunchIntentForPackage(SocialAppCatalog.ANKIDROID_PACKAGE)
+        val ankiIntent = SocialAppCatalog.ankiDroidPackages
+            .firstNotNullOfOrNull { pkg -> packageManager.getLaunchIntentForPackage(pkg) }
         if (ankiIntent != null) {
             ankiIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(ankiIntent)

@@ -1,6 +1,7 @@
 package com.ankiduel.android.data
 
 import com.ankiduel.android.blocker.BlockStateHolder
+import com.ankiduel.android.tracking.AnkiActivitySnapshot
 import com.ankiduel.android.tracking.AnkiDroidTracker
 import com.ankiduel.android.tracking.InstalledAppItem
 import com.ankiduel.android.tracking.PermissionHealth
@@ -21,6 +22,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+data class TrackingDiagnostics(
+    val rawAnkiSeconds: Long = 0L,
+    val effectiveAnkiSeconds: Long = 0L,
+    val ankiEventCount: Int = 0,
+    val usedDailyStatsFallback: Boolean = false,
+    val ankiApiSnapshot: AnkiActivitySnapshot = AnkiActivitySnapshot(
+        apiConnected = false,
+        cardsReviewedToday = 0
+    ),
+    val capturedAtEpochMs: Long = 0L
+)
 
 class AnkiDuelRepository(
     private val prefs: PreferencesStore,
@@ -55,6 +68,9 @@ class AnkiDuelRepository(
 
     private val _isIdleFlagged = MutableStateFlow(false)
     val isIdleFlagged: StateFlow<Boolean> = _isIdleFlagged.asStateFlow()
+
+    private val _trackingDiagnostics = MutableStateFlow(TrackingDiagnostics())
+    val trackingDiagnostics: StateFlow<TrackingDiagnostics> = _trackingDiagnostics.asStateFlow()
 
     private val _lockStatus = MutableStateFlow(
         GlobalLockStatus(false, 0L, 0, null, null, null, 0L)
@@ -223,6 +239,7 @@ class AnkiDuelRepository(
         prefs.saveAntiIdleState(idleResult.nextState)
         _isIdleFlagged.value = idleResult.isIdleFlagged
 
+        val nowMs = System.currentTimeMillis()
         val snapshot = UsageSnapshot(
             ankiForegroundSeconds = rawAnki,
             ankiEffectiveSeconds = idleResult.effectiveSeconds,
@@ -232,9 +249,17 @@ class AnkiDuelRepository(
             permissionsHealthy = if (current.demoMode) true else health.allEnforcementPermissionsHealthy,
             trackedSocialPackages = tracked,
             ankiApiConnected = ankiApi.apiConnected,
-            capturedAtEpochMs = System.currentTimeMillis()
+            capturedAtEpochMs = nowMs
         )
         _usageSnapshot.value = snapshot
+        _trackingDiagnostics.value = TrackingDiagnostics(
+            rawAnkiSeconds = rawAnki,
+            effectiveAnkiSeconds = idleResult.effectiveSeconds,
+            ankiEventCount = rawMeasurement.ankiEventCount,
+            usedDailyStatsFallback = rawMeasurement.usedDailyStatsFallback,
+            ankiApiSnapshot = ankiApi,
+            capturedAtEpochMs = nowMs
+        )
 
         val updatedDuels = if (current.demoMode) {
             demoBot.syncSnapshot(snapshot)

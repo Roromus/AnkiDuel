@@ -320,8 +320,10 @@ fun DashboardScreen(
                             ) {
                                 Button(
                                     onClick = {
-                                        val ankiIntent = context.packageManager
-                                            .getLaunchIntentForPackage(SocialAppCatalog.ANKIDROID_PACKAGE)
+                                        val ankiIntent = SocialAppCatalog.ankiDroidPackages
+                                            .firstNotNullOfOrNull { pkg ->
+                                                context.packageManager.getLaunchIntentForPackage(pkg)
+                                            }
                                         if (ankiIntent != null) context.startActivity(ankiIntent)
                                     },
                                     shape = RoundedCornerShape(14.dp),
@@ -456,10 +458,10 @@ fun DashboardScreen(
                                 color = TextPrimary
                             )
                             Text(
-                                text = if (usage.ankiApiConnected) {
-                                    "${usage.cardsReviewed} cartes révisées"
-                                } else {
-                                    "Suivi temps écran"
+                                text = when {
+                                    usage.ankiApiConnected -> "${usage.cardsReviewed} cartes révisées"
+                                    health.ankiDroidInstalled && health.ankiDroidApiGranted -> "API AnkiDroid inactive"
+                                    else -> "Suivi temps écran"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextMuted
@@ -510,6 +512,7 @@ fun DashboardScreen(
                     )
 
                     if (isIdleFlagged) {
+                        val rawAnkiMin = (usage.ankiForegroundSeconds / 60L).toInt()
                         Spacer(Modifier.height(14.dp))
                         Row(
                             modifier = Modifier
@@ -527,7 +530,11 @@ fun DashboardScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "Anti-inactivité : aucune carte révisée récemment, compteur plafonné.",
+                                text = if (rawAnkiMin > ankiMin) {
+                                    "Anti-inactivité : $rawAnkiMin min mesurées, plafonnées à $ankiMin min sans nouvelle carte révisée."
+                                } else {
+                                    "Anti-inactivité : aucune carte révisée récemment, compteur plafonné."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AmberJokerSoft
                             )

@@ -6,10 +6,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.ankiduel.android.blocker.SocialBlockAccessibilityService
+import com.ankiduel.shared.model.SocialAppCatalog
 
 data class PermissionHealth(
     val usageAccessGranted: Boolean,
@@ -17,7 +19,9 @@ data class PermissionHealth(
     val overlayGranted: Boolean,
     val notificationsGranted: Boolean,
     val ankiDroidInstalled: Boolean,
-    val ankiDroidApiGranted: Boolean
+    val ankiDroidApiGranted: Boolean,
+    val ignoringBatteryOptimizations: Boolean = true,
+    val ankiDroidPackage: String? = null
 ) {
     val allEnforcementPermissionsHealthy: Boolean
         get() = usageAccessGranted && accessibilityGranted && overlayGranted
@@ -26,16 +30,25 @@ data class PermissionHealth(
 class PermissionHealthChecker(private val context: Context) {
 
     fun check(): PermissionHealth {
+        val detectedAnkiPkg = SocialAppCatalog.ankiDroidPackages.firstOrNull { isPackageInstalled(it) }
+        val apiPermGranted = buildList {
+            add(AnkiDroidTracker.ANKI_READ_WRITE_PERMISSION)
+            if (detectedAnkiPkg != null && detectedAnkiPkg != SocialAppCatalog.ANKIDROID_PACKAGE) {
+                add("$detectedAnkiPkg.permission.READ_WRITE_DATABASE")
+            }
+        }.any { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+
         return PermissionHealth(
             usageAccessGranted = hasUsageStatsPermission(),
             accessibilityGranted = isAccessibilityServiceEnabled(),
             overlayGranted = Settings.canDrawOverlays(context),
             notificationsGranted = hasNotificationPermission(),
-            ankiDroidInstalled = isPackageInstalled("com.ichi2.anki"),
-            ankiDroidApiGranted = ContextCompat.checkSelfPermission(
-                context,
-                "com.ichi2.anki.permission.READ_WRITE_DATABASE"
-            ) == PackageManager.PERMISSION_GRANTED
+            ankiDroidInstalled = detectedAnkiPkg != null,
+            ankiDroidApiGranted = apiPermGranted,
+            ignoringBatteryOptimizations = isIgnoringBatteryOptimizations(),
+            ankiDroidPackage = detectedAnkiPkg
         )
     }
 
@@ -76,6 +89,11 @@ class PermissionHealthChecker(private val context: Context) {
         } else {
             true
         }
+    }
+
+    fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return true
+        return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
     fun isPackageInstalled(packageName: String): Boolean {

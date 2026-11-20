@@ -36,4 +36,34 @@ class AntiIdleValidatorTest {
         assertEquals(240L, r3.effectiveSeconds)
         assertFalse(r3.isIdleFlagged)
     }
+
+    @Test
+    fun `credits full gap when multiple cards were reviewed while background sync was paused`() {
+        val validator = AntiIdleValidator(graceSecondsPerWindow = 180L)
+        // Phone killed background service for 20 min (1200s) while user reviewed 25 cards
+        val r1 = validator.evaluate(AntiIdleValidator.State(), rawAnkiSeconds = 1200L, cardsReviewed = 25, ankiApiConnected = true)
+        assertEquals(1200L, r1.effectiveSeconds)
+        assertFalse(r1.isIdleFlagged)
+
+        // Next short poll shouldn't immediately flag idle
+        val r2 = validator.evaluate(r1.nextState, rawAnkiSeconds = 1230L, cardsReviewed = 25, ankiApiConnected = true)
+        assertEquals(1230L, r2.effectiveSeconds)
+        assertFalse(r2.isIdleFlagged)
+    }
+
+    @Test
+    fun `preserves prior effective seconds when Anki day rollover resets card count mid-day`() {
+        val validator = AntiIdleValidator(graceSecondsPerWindow = 180L)
+        val r1 = validator.evaluate(AntiIdleValidator.State(), rawAnkiSeconds = 600L, cardsReviewed = 20, ankiApiConnected = true)
+        assertEquals(600L, r1.effectiveSeconds)
+
+        // At 4am Anki day rollover, cardsReviewed resets to 0 while rawAnkiSeconds stays >= 600
+        val r2 = validator.evaluate(r1.nextState, rawAnkiSeconds = 660L, cardsReviewed = 0, ankiApiConnected = true)
+        assertEquals(660L, r2.effectiveSeconds)
+
+        // New cards reviewed after rollover continue crediting seamlessly
+        val r3 = validator.evaluate(r2.nextState, rawAnkiSeconds = 840L, cardsReviewed = 5, ankiApiConnected = true)
+        assertEquals(840L, r3.effectiveSeconds)
+        assertFalse(r3.isIdleFlagged)
+    }
 }

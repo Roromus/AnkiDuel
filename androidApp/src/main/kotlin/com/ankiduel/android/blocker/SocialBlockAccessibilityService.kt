@@ -19,7 +19,7 @@ class SocialBlockAccessibilityService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
 
         // Ne jamais bloquer AnkiDuel, AnkiDroid ou le lanceur système
-        if (pkg == packageName || pkg == SocialAppCatalog.ANKIDROID_PACKAGE) return
+        if (pkg == packageName || SocialAppCatalog.isAnkiDroidPackage(pkg)) return
 
         val lockStatus = BlockStateHolder.lockStatus.value
         val now = System.currentTimeMillis()

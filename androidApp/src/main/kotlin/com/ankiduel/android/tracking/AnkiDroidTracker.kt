@@ -3,73 +3,125 @@ package com.ankiduel.android.tracking
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.core.content.ContextCompat
-import java.time.LocalDate
-import java.time.ZoneId
+import com.ankiduel.shared.model.SocialAppCatalog
+
+enum class AnkiApiStatus {
+    CONNECTED,
+    NOT_INSTALLED,
+    PERMISSION_MISSING,
+    PROVIDER_UNAVAILABLE,
+    QUERY_FAILED
+}
 
 data class AnkiActivitySnapshot(
     val apiConnected: Boolean,
-    val cardsReviewedToday: Int
+    val cardsReviewedToday: Int,
+    val status: AnkiApiStatus = if (apiConnected) AnkiApiStatus.CONNECTED else AnkiApiStatus.PROVIDER_UNAVAILABLE,
+    val detectedPackage: String? = null,
+    val diagnosticDetail: String? = null
 )
 
 /**
  * Interroge le ContentProvider officiel d'AnkiDroid (FlashCardsContract) lorsqu'il est autorisé
- * afin de récupérer le nombre de cartes révisées aujourd'hui pour la détection anti-inactivité.
+ * afin de récupérer le nombre de notes/cartes révisées aujourd'hui (`rated:1`) pour la détection anti-inactivité.
  */
 class AnkiDroidTracker(private val context: Context) {
 
+    fun findInstalledAnkiPackage(): String? {
+        return SocialAppCatalog.ankiDroidPackages.firstOrNull { isPackageInstalled(it) }
+    }
+
+    fun hasAnkiApiPermission(ankiPackage: String? = findInstalledAnkiPackage()): Boolean {
+        val candidates = buildList {
+            add(ANKI_READ_WRITE_PERMISSION)
+            if (!ankiPackage.isNullOrBlank() && ankiPackage != SocialAppCatalog.ANKIDROID_PACKAGE) {
+                add("$ankiPackage.permission.READ_WRITE_DATABASE")
+            }
+        }
+        return candidates.any { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     fun queryTodayCardsReviewed(): AnkiActivitySnapshot {
-        val hasPermission = ContextCompat.checkSelfPermission(
-            context,
-            "com.ichi2.anki.permission.READ_WRITE_DATABASE"
-        ) == PackageManager.PERMISSION_GRANTED
+        val ankiPkg = findInstalledAnkiPackage()
+            ?: return AnkiActivitySnapshot(
+                apiConnected = false,
+                cardsReviewedToday = 0,
+                status = AnkiApiStatus.NOT_INSTALLED,
+                diagnosticDetail = "AnkiDroid non détecté sur cet appareil."
+            )
 
-        if (!hasPermission) {
-            return AnkiActivitySnapshot(apiConnected = false, cardsReviewedToday = 0)
+        if (!hasAnkiApiPermission(ankiPkg)) {
+            return AnkiActivitySnapshot(
+                apiConnected = false,
+                cardsReviewedToday = 0,
+                status = AnkiApiStatus.PERMISSION_MISSING,
+                detectedPackage = ankiPkg,
+                diagnosticDetail = "Permission API AnkiDroid non accordée."
+            )
         }
 
-        // AnkiDroid FlashCardsContract exposes review_info / decks under com.ichi2.anki.flashcards
-        val midnightMs = LocalDate.now()
-            .atStartOfDay(ZoneId.systemDefault())
-            .toInstant()
-            .toEpochMilli()
+        val authority = "$ankiPkg.flashcards"
+        // FlashCardsContract.Note.CONTENT_URI attend une requête de recherche Anki dans `selection`
+        // (et `selectionArgs = null`). `rated:1` retourne les notes révisées aujourd'hui.
+        val notesUri = Uri.parse("content://$authority/notes")
 
-        // Try querying revlog / cards modified today via AnkiDroid FlashCardsContract URI
-        val cardsUri = Uri.parse("content://com.ichi2.anki.flashcards/notes")
-        return runCatching {
-            // Vérifie d'abord que le provider répond
-            val deckUri = Uri.parse("content://com.ichi2.anki.flashcards/decks")
-            context.contentResolver.query(deckUri, null, null, null, null)?.use { deckCursor ->
-                // Provider accessible : on interroge les cartes révisées récemment si le provider l'expose
-                var reviewedCount = 0
-                val revUri = Uri.parse("content://com.ichi2.anki.flashcards/schedule")
-                runCatching {
-                    context.contentResolver.query(revUri, null, null, null, null)?.use { sched ->
-                        // Certains schémas exposent le compteur de révisions dans les colonnes de schedule/decks
-                        reviewedCount = sched.count
-                    }
-                }
-                if (reviewedCount == 0) {
-                    // Fallback : nombre de paquets actifs ou notes modifiées aujourd'hui
-                    runCatching {
-                        context.contentResolver.query(
-                            cardsUri,
-                            arrayOf("_id"),
-                            "mod >= ?",
-                            arrayOf((midnightMs / 1000L).toString()),
-                            null
-                        )?.use { c ->
-                            reviewedCount = c.count
-                        }
-                    }
-                }
+        return try {
+            context.contentResolver.query(
+                notesUri,
+                arrayOf("_id"),
+                "rated:1",
+                null,
+                null
+            )?.use { cursor ->
                 AnkiActivitySnapshot(
-                    apiConnected = deckCursor.count >= 0,
-                    cardsReviewedToday = reviewedCount
+                    apiConnected = true,
+                    cardsReviewedToday = cursor.count.coerceAtLeast(0),
+                    status = AnkiApiStatus.CONNECTED,
+                    detectedPackage = ankiPkg
                 )
-            } ?: AnkiActivitySnapshot(apiConnected = false, cardsReviewedToday = 0)
-        }.getOrElse {
-            AnkiActivitySnapshot(apiConnected = false, cardsReviewedToday = 0)
+            } ?: AnkiActivitySnapshot(
+                apiConnected = false,
+                cardsReviewedToday = 0,
+                status = AnkiApiStatus.PROVIDER_UNAVAILABLE,
+                detectedPackage = ankiPkg,
+                diagnosticDetail = "Le fournisseur AnkiDroid n'a pas répondu (vérifiez Paramètres > Avancé > API AnkiDroid dans AnkiDroid)."
+            )
+        } catch (sec: SecurityException) {
+            AnkiActivitySnapshot(
+                apiConnected = false,
+                cardsReviewedToday = 0,
+                status = AnkiApiStatus.PERMISSION_MISSING,
+                detectedPackage = ankiPkg,
+                diagnosticDetail = sec.message ?: "Accès refusé par AnkiDroid."
+            )
+        } catch (err: Exception) {
+            AnkiActivitySnapshot(
+                apiConnected = false,
+                cardsReviewedToday = 0,
+                status = AnkiApiStatus.QUERY_FAILED,
+                detectedPackage = ankiPkg,
+                diagnosticDetail = err.message ?: err.javaClass.simpleName
+            )
         }
+    }
+
+    private fun isPackageInstalled(packageName: String): Boolean {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(packageName, 0)
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    companion object {
+        const val ANKI_READ_WRITE_PERMISSION = "com.ichi2.anki.permission.READ_WRITE_DATABASE"
     }
 }

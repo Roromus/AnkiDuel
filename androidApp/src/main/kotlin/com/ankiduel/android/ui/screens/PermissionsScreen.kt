@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AccessibilityNew
+import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.NotificationsNone
@@ -52,6 +53,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.ankiduel.android.data.TrackingDiagnostics
+import com.ankiduel.android.tracking.AnkiApiStatus
+import com.ankiduel.android.tracking.AnkiDroidTracker
 import com.ankiduel.android.tracking.PermissionHealth
 import com.ankiduel.android.ui.components.AmbientGlowBackdrop
 import com.ankiduel.android.ui.components.ObsidianCard
@@ -75,6 +79,7 @@ import com.ankiduel.android.ui.theme.TextSecondary
 @Composable
 fun PermissionsScreen(
     health: PermissionHealth,
+    diagnostics: TrackingDiagnostics = TrackingDiagnostics(),
     onRefresh: () -> Unit,
     onContinue: () -> Unit
 ) {
@@ -239,17 +244,55 @@ fun PermissionsScreen(
                 PermissionCard(
                     icon = Icons.Rounded.School,
                     title = "API AnkiDroid (Anti-triche)",
-                    description = if (health.ankiDroidInstalled) {
-                        "Vérifie le nombre de cartes réellement révisées pour empêcher l'inactivité."
-                    } else {
-                        "AnkiDroid non détecté sur cet appareil (optionnel en mode Démo)."
+                    description = when {
+                        !health.ankiDroidInstalled ->
+                            "AnkiDroid non détecté sur cet appareil (optionnel en mode Démo)."
+                        health.ankiDroidApiGranted && diagnostics.ankiApiSnapshot.status == AnkiApiStatus.PROVIDER_UNAVAILABLE ->
+                            "Permission accordée, mais l'API est désactivée dans AnkiDroid (Paramètres > Avancé > Activer l'API AnkiDroid)."
+                        else ->
+                            "Vérifie le nombre de cartes réellement révisées pour empêcher l'inactivité."
                     },
                     granted = health.ankiDroidApiGranted,
                     required = false,
                     actionLabel = "Connecter",
                     onClick = {
-                        ankiApiLauncher.launch("com.ichi2.anki.permission.READ_WRITE_DATABASE")
+                        val perm = health.ankiDroidPackage
+                            ?.takeIf { it != com.ankiduel.shared.model.SocialAppCatalog.ANKIDROID_PACKAGE }
+                            ?.let { "$it.permission.READ_WRITE_DATABASE" }
+                            ?: AnkiDroidTracker.ANKI_READ_WRITE_PERMISSION
+                        ankiApiLauncher.launch(perm)
                     }
+                )
+
+                PermissionCard(
+                    icon = Icons.Rounded.BatteryChargingFull,
+                    title = "Batterie sans restriction",
+                    description = "Empêche le téléphone (Xiaomi, Samsung, Oppo…) de couper le suivi AnkiDroid en arrière-plan.",
+                    granted = health.ignoringBatteryOptimizations,
+                    required = false,
+                    actionLabel = "Autoriser",
+                    onClick = {
+                        val directIntent = Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        runCatching { context.startActivity(directIntent) }
+                            .onFailure { context.startActivity(fallbackIntent) }
+                    }
+                )
+
+                Spacer(Modifier.height(6.dp))
+
+                Text(
+                    text = "DIAGNOSTIC SUIVI ANKI",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+
+                TrackingDiagnosticCard(
+                    health = health,
+                    diagnostics = diagnostics
                 )
 
                 Spacer(Modifier.height(12.dp))
@@ -387,5 +430,86 @@ private fun PermissionCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TrackingDiagnosticCard(
+    health: PermissionHealth,
+    diagnostics: TrackingDiagnostics
+) {
+    val apiSnap = diagnostics.ankiApiSnapshot
+    val apiSummary = when (apiSnap.status) {
+        AnkiApiStatus.CONNECTED -> "Connectée (${apiSnap.cardsReviewedToday} cartes aujourd'hui)"
+        AnkiApiStatus.NOT_INSTALLED -> "AnkiDroid non installé"
+        AnkiApiStatus.PERMISSION_MISSING -> "Permission non accordée"
+        AnkiApiStatus.PROVIDER_UNAVAILABLE -> "Fournisseur muet (activer l'API dans AnkiDroid)"
+        AnkiApiStatus.QUERY_FAILED -> "Erreur requête (${apiSnap.diagnosticDetail ?: "inconnue"})"
+    }
+
+    val rawMin = diagnostics.rawAnkiSeconds / 60L
+    val rawRemSec = diagnostics.rawAnkiSeconds % 60L
+    val effMin = diagnostics.effectiveAnkiSeconds / 60L
+    val effRemSec = diagnostics.effectiveAnkiSeconds % 60L
+    val sourceLabel = if (diagnostics.usedDailyStatsFallback) {
+        "UsageStats quotidien (secours)"
+    } else {
+        "${diagnostics.ankiEventCount} événements aujourd'hui"
+    }
+
+    ObsidianCard(
+        shape = RoundedCornerShape(18.dp),
+        borderTint = Color.White,
+        borderAlpha = 0.08f,
+        contentPadding = PaddingValues(15.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            DiagnosticRow(
+                label = "Paquet AnkiDroid",
+                value = health.ankiDroidPackage ?: "Non détecté"
+            )
+            DiagnosticRow(
+                label = "Temps Anki brut",
+                value = "${rawMin}m ${rawRemSec}s ($sourceLabel)"
+            )
+            DiagnosticRow(
+                label = "Temps Anki validé",
+                value = "${effMin}m ${effRemSec}s"
+            )
+            DiagnosticRow(
+                label = "API AnkiDroid",
+                value = apiSummary
+            )
+            if (!apiSnap.diagnosticDetail.isNullOrBlank() && apiSnap.status != AnkiApiStatus.CONNECTED) {
+                Text(
+                    text = apiSnap.diagnosticDetail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AmberJokerSoft
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextMuted
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium,
+            color = TextPrimary,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f)
+        )
     }
 }

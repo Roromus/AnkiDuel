@@ -145,6 +145,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
     val health by viewModel.permissionHealth.collectAsState()
     val lockStatus by viewModel.lockStatus.collectAsState()
     val isIdleFlagged by viewModel.isIdleFlagged.collectAsState()
+    val trackingDiagnostics by viewModel.trackingDiagnostics.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
     val isBusy by viewModel.isBusy.collectAsState()
     val feedback by viewModel.feedbackMessage.collectAsState()
@@ -243,6 +244,7 @@ private fun AnkiDuelAppRoot(viewModel: AppViewModel) {
                     RootRoute.PERMISSIONS -> {
                         PermissionsScreen(
                             health = health,
+                            diagnostics = trackingDiagnostics,
                             onRefresh = { viewModel.refreshAll() },
                             onContinue = { showPermissions = false }
                         )

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.ankiduel.android.data.AnkiDuelRepository
 import com.ankiduel.android.data.StoredSession
+import com.ankiduel.android.data.TrackingDiagnostics
 import com.ankiduel.android.tracking.InstalledAppItem
 import com.ankiduel.android.tracking.PermissionHealth
 import com.ankiduel.android.update.AppUpdateManager
@@ -29,6 +30,7 @@ class AppViewModel(
     val permissionHealth: StateFlow<PermissionHealth> = repository.permissionHealth
     val lockStatus: StateFlow<GlobalLockStatus> = repository.lockStatus
     val isIdleFlagged: StateFlow<Boolean> = repository.isIdleFlagged
+    val trackingDiagnostics: StateFlow<TrackingDiagnostics> = repository.trackingDiagnostics
     val updateState: StateFlow<UpdateState> = updateManager.state
 
     private val _installedApps = MutableStateFlow<List<InstalledAppItem>>(emptyList())

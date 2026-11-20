@@ -36,14 +36,20 @@ class AntiIdleValidator(
         val safeRaw = rawAnkiSeconds.coerceAtLeast(0L)
         val safeCards = cardsReviewed.coerceAtLeast(0)
 
-        // Réinitialisation si nouveau cycle (minuit)
-        if (safeRaw < previous.lastRawAnkiSeconds || safeCards < previous.lastCardsReviewed) {
+        // Réinitialisation si nouveau cycle (minuit : le temps brut repart de 0)
+        if (safeRaw < previous.lastRawAnkiSeconds) {
             val fresh = State()
             return evaluate(fresh, safeRaw, safeCards, ankiApiConnected)
         }
 
         val rawDelta = safeRaw - previous.lastRawAnkiSeconds
-        val cardsDelta = safeCards - previous.lastCardsReviewed
+        // Si le compteur de cartes diminue en cours de journée (ex: changement de jour Anki à 4h du matin ou synchro),
+        // ne pas effacer le temps effectif déjà validé aujourd'hui.
+        val cardsDelta = if (safeCards < previous.lastCardsReviewed) {
+            safeCards
+        } else {
+            safeCards - previous.lastCardsReviewed
+        }
 
         if (!ankiApiConnected) {
             val next = State(
@@ -60,12 +66,20 @@ class AntiIdleValidator(
             )
         }
 
-        val windowSeconds = if (cardsDelta > 0) 0L else previous.secondsSinceLastReview
-        val remainingGrace = (graceSecondsPerWindow - windowSeconds).coerceAtLeast(0L)
+        val remainingGrace = if (cardsDelta > 0) {
+            cardsDelta.toLong() * graceSecondsPerWindow
+        } else {
+            (graceSecondsPerWindow - previous.secondsSinceLastReview).coerceAtLeast(0L)
+        }
         val creditedDelta = min(rawDelta, remainingGrace)
         val newEffective = previous.accumulatedEffectiveSeconds + creditedDelta
-        val newWindowSeconds = windowSeconds + rawDelta
         val isIdle = rawDelta > remainingGrace
+        val newWindowSeconds = when {
+            cardsDelta <= 0 -> previous.secondsSinceLastReview + rawDelta
+            isIdle -> graceSecondsPerWindow
+            rawDelta <= graceSecondsPerWindow -> rawDelta
+            else -> (rawDelta / cardsDelta).coerceAtMost(graceSecondsPerWindow)
+        }
 
         val next = State(
             lastRawAnkiSeconds = safeRaw,

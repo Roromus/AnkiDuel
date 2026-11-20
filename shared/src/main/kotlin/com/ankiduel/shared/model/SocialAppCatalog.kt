@@ -12,6 +12,16 @@ data class SocialAppInfo(
 object SocialAppCatalog {
     const val ANKIDROID_PACKAGE = "com.ichi2.anki"
 
+    val ankiDroidPackages: List<String> = listOf(
+        "com.ichi2.anki",
+        "com.ichi2.anki.a",
+        "com.ichi2.anki.b",
+        "com.ichi2.anki.debug"
+    )
+
+    fun isAnkiDroidPackage(packageName: String): Boolean =
+        packageName == ANKIDROID_PACKAGE || packageName.startsWith("$ANKIDROID_PACKAGE.")
+
     val defaultSocialApps: List<SocialAppInfo> = listOf(
         SocialAppInfo("com.instagram.android", "Instagram"),
         SocialAppInfo("com.zhiliaoapp.musically", "TikTok"),
